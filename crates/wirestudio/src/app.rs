@@ -236,7 +236,7 @@ impl WireStudio {
             palette_filter: String::new(),
             new_prop_key: String::new(),
             tab: BottomTab::Asm,
-            console: vec!["WireStudio ready.".to_string()],
+            console: vec![t(lang, "status.console_ready").to_string()],
             variables_open: false,
             custom_editor: None,
             confirm: None,
@@ -386,11 +386,8 @@ impl WireStudio {
         let mut path = self.path.clone();
         if save_as || path.is_none() {
             let name = self.default_file_name("json");
-            match self.pick_save(
-                self.tr("file.save_as"),
-                &[("WireASM graph", &["json"])],
-                &name,
-            ) {
+            let filter = self.tr("dialog.graph");
+            match self.pick_save(self.tr("file.save_as"), &[(filter, &["json"])], &name) {
                 Some(p) => path = Some(with_extension(p, "json")),
                 None => {
                     self.status = self.tr("status.cancelled").to_string();
@@ -452,7 +449,8 @@ impl WireStudio {
 
     fn open_dialog(&mut self) {
         let title = self.tr("file.open").to_string();
-        if let Some(path) = self.pick_open(&title, &[("WireASM graph", &["json"])]) {
+        let filter = self.tr("dialog.graph");
+        if let Some(path) = self.pick_open(&title, &[(filter, &["json"])]) {
             self.open_path(&path);
         }
     }
@@ -476,7 +474,7 @@ impl WireStudio {
                 self.redo.clear();
                 self.status = self.tr("status.new").to_string();
             }
-            Err(e) => self.error(format!("example: {e}")),
+            Err(e) => self.error(format!("{}: {e}", self.tr("file.examples"))),
         }
     }
 
@@ -490,9 +488,10 @@ impl WireStudio {
             return;
         }
         let name = self.default_file_name("s");
+        let filter = self.tr("dialog.asm");
         if let Some(path) = self.pick_save(
             self.tr("file.export_asm"),
-            &[("Assembler", &["s", "asm"])],
+            &[(filter, &["s", "asm"])],
             &name,
         ) {
             let path = with_extension(path, "s");
@@ -513,7 +512,8 @@ impl WireStudio {
 
     fn import_library(&mut self) {
         let title = self.tr("file.import_library").to_string();
-        let Some(path) = self.pick_open(&title, &[("WireASM library", &["json"])]) else {
+        let filter = self.tr("dialog.library");
+        let Some(path) = self.pick_open(&title, &[(filter, &["json"])]) else {
             return;
         };
         let src = match std::fs::read_to_string(&path) {
@@ -544,9 +544,10 @@ impl WireStudio {
             return;
         }
         let name = format!("{}.wirelib.json", artifact_stem(&self.graph));
+        let filter = self.tr("dialog.library");
         if let Some(path) = self.pick_save(
             self.tr("file.export_library"),
-            &[("WireASM library", &["json"])],
+            &[(filter, &["json"])],
             &name,
         ) {
             let path = if path.extension().is_none() {
@@ -567,10 +568,8 @@ impl WireStudio {
 
     fn import_asm(&mut self) {
         let title = self.tr("file.import_asm").to_string();
-        let Some(path) = self.pick_open(
-            &title,
-            &[("Assembler source", &["s", "asm", "S", "txt"])],
-        ) else {
+        let filter = self.tr("dialog.asm_source");
+        let Some(path) = self.pick_open(&title, &[(filter, &["s", "asm", "S", "txt"])]) else {
             return;
         };
         let text = match std::fs::read_to_string(&path) {
@@ -615,10 +614,20 @@ impl WireStudio {
         if pins_for(&def.kind).is_some() {
             return Err(self.tr("custom.error_builtin").to_string());
         }
+        if original.as_deref() != Some(def.kind.as_str()) && self.graph.custom(&def.kind).is_some() {
+            return Err(self.tr("custom.error_exists").to_string());
+        }
         if def.asm_aarch64.trim().is_empty() || def.asm_x86_64.trim().is_empty() {
             return Err(self.tr("custom.error_asm").to_string());
         }
         if !pins_ok(&def.inputs) || !pins_ok(&def.outputs) {
+            return Err(self.tr("custom.error_pin").to_string());
+        }
+        let u64_inputs = def.inputs.iter().filter(|p| p.ty == TY_U64).count();
+        let u64_outputs = def.outputs.iter().filter(|p| p.ty == TY_U64).count();
+        let exec_inputs = def.inputs.iter().filter(|p| p.ty == TY_EXEC).count();
+        let exec_outputs = def.outputs.iter().filter(|p| p.ty == TY_EXEC).count();
+        if u64_inputs > 8 || u64_outputs > 1 || (exec_outputs > 0 && exec_inputs == 0) {
             return Err(self.tr("custom.error_pin").to_string());
         }
         self.snapshot();
@@ -798,7 +807,7 @@ impl WireStudio {
             return;
         }
         let Some(target) = Target::parse(&self.graph.target) else {
-            self.error("unknown target");
+            self.error(self.tr("status.unknown_target"));
             return;
         };
         if !toolchain::can_build(target) {
@@ -1661,12 +1670,18 @@ fn pins_ok(pins: &[CustomPin]) -> bool {
             return false;
         }
         match p.ty.as_str() {
-            TY_EXEC => execs += 1,
-            TY_U64 => {}
+            TY_EXEC => {
+                if p.name != "exec" {
+                    return false;
+                }
+                execs += 1;
+            }
+            TY_U64 => {
+                if p.name == "exec" {
+                    return false;
+                }
+            }
             _ => return false,
-        }
-        if p.name == "exec" && p.ty != TY_EXEC {
-            return false;
         }
     }
     execs <= 1
