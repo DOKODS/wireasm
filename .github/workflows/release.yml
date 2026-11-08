@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: x86_64-linux
+            archive: wirestudio-0.1.0-x86_64-linux.tar.gz
+          - os: windows-latest
+            name: x86_64-windows
+            archive: wirestudio-0.1.0-x86_64-windows.zip
+          - os: macos-13
+            name: x86_64-macos
+            archive: wirestudio-0.1.0-x86_64-macos.tar.gz
+          - os: macos-14
+            name: aarch64-macos
+            archive: wirestudio-0.1.0-aarch64-macos.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --workspace
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/wirestudio dist/
+          cp target/release/wireasm dist/
+          cp README.md LICENSE CHANGELOG.md dist/
+          tar -czf "${{ matrix.archive }}" -C dist .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/wirestudio.exe dist/
+          Copy-Item target/release/wireasm.exe dist/
+          Copy-Item README.md, LICENSE, CHANGELOG.md dist/
+          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.archive }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

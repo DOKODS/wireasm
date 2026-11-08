@@ -1,0 +1,15 @@
+# build output
+/target/
+
+# generated and packaged binaries
+/out/*.exe
+/out/*.bin
+/out/wireasm-*
+/releases/*
+!/releases/README.md
+
+# editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

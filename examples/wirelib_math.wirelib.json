@@ -1,0 +1,43 @@
+{
+  "format": "wireasm-library",
+  "version": "1",
+  "name": "WireASM math",
+  "description": "Small starter library: double and add as custom nodes.",
+  "nodes": [
+    {
+      "kind": "lib_double",
+      "title": "Double",
+      "category": "Math",
+      "description": "Multiplies the input by two.",
+      "inputs": [
+        { "name": "value", "type": "u64" }
+      ],
+      "outputs": [
+        { "name": "result", "type": "u64" }
+      ],
+      "asm": {
+        "aarch64": "lsl {out}, {in0}, #1",
+        "x86_64": "mov rax, rdi\nshl rax, 1"
+      }
+    },
+    {
+      "kind": "lib_add",
+      "title": "Add",
+      "category": "Math",
+      "description": "Adds two values, exec in/out.",
+      "inputs": [
+        { "name": "exec", "type": "exec" },
+        { "name": "a", "type": "u64" },
+        { "name": "b", "type": "u64" }
+      ],
+      "outputs": [
+        { "name": "exec", "type": "exec" },
+        { "name": "result", "type": "u64" }
+      ],
+      "asm": {
+        "aarch64": "add {out}, {in0}, {in1}",
+        "x86_64": "mov rax, rdi\nadd rax, rsi"
+      }
+    }
+  ]
+}

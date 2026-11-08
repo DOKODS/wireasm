@@ -1,0 +1,31 @@
+[package]
+name = "wirestudio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native WireASM graph IDE"
+
+[[bin]]
+name = "wirestudio"
+path = "src/main.rs"
+
+[dependencies]
+wireasm-core = { path = "../wireasm-core" }
+rfd = "0.18"
+sys-locale = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+    "links",
+] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+eframe = { version = "0.37", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "links",
+] }

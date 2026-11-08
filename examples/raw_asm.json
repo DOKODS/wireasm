@@ -1,0 +1,21 @@
+{
+  "name": "raw_asm",
+  "target": "aarch64-macos",
+  "variables": [],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 80, "y": 240, "props": {} },
+    { "id": "ca", "kind": "Const", "x": 80, "y": 420, "props": { "value": "40" } },
+    { "id": "cb", "kind": "Const", "x": 260, "y": 420, "props": { "value": "2" } },
+    { "id": "raw", "kind": "RawAsm", "x": 420, "y": 260, "props": { "text": "add {a}, {a}, {b}" } },
+    { "id": "print", "kind": "PrintU64", "x": 760, "y": 240, "props": {} },
+    { "id": "ret", "kind": "Return", "x": 1020, "y": 260, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "raw", "toPin": "exec" },
+    { "fromNode": "ca", "fromPin": "value", "toNode": "raw", "toPin": "a" },
+    { "fromNode": "cb", "fromPin": "value", "toNode": "raw", "toPin": "b" },
+    { "fromNode": "raw", "fromPin": "exec", "toNode": "print", "toPin": "exec" },
+    { "fromNode": "raw", "fromPin": "result", "toNode": "print", "toPin": "value" },
+    { "fromNode": "print", "fromPin": "exec", "toNode": "ret", "toPin": "exec" }
+  ]
+}

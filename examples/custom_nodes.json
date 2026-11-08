@@ -1,0 +1,60 @@
+{
+  "name": "custom_nodes",
+  "target": "aarch64-macos",
+  "variables": [],
+  "customNodes": [
+    {
+      "kind": "lib_double",
+      "title": "Double",
+      "category": "Math",
+      "description": "Multiplies the input by two. Shows a data-only custom node.",
+      "inputs": [
+        { "name": "value", "type": "u64" }
+      ],
+      "outputs": [
+        { "name": "result", "type": "u64" }
+      ],
+      "asm": {
+        "aarch64": "lsl {out}, {in0}, #1",
+        "x86_64": "mov rax, rdi\nshl rax, 1"
+      }
+    },
+    {
+      "kind": "lib_add",
+      "title": "Add",
+      "category": "Math",
+      "description": "Adds two values. Shows a flow custom node with exec in/out.",
+      "inputs": [
+        { "name": "exec", "type": "exec" },
+        { "name": "a", "type": "u64" },
+        { "name": "b", "type": "u64" }
+      ],
+      "outputs": [
+        { "name": "exec", "type": "exec" },
+        { "name": "result", "type": "u64" }
+      ],
+      "asm": {
+        "aarch64": "add {out}, {in0}, {in1}",
+        "x86_64": "mov rax, rdi\nadd rax, rsi"
+      }
+    }
+  ],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 40, "y": 240, "props": {} },
+    { "id": "ten", "kind": "Const", "x": 40, "y": 420, "props": { "value": "10" } },
+    { "id": "twice", "kind": "lib_double", "x": 260, "y": 420, "props": {} },
+    { "id": "twenty_two", "kind": "Const", "x": 40, "y": 560, "props": { "value": "22" } },
+    { "id": "add", "kind": "lib_add", "x": 480, "y": 240, "props": {} },
+    { "id": "print", "kind": "PrintU64", "x": 720, "y": 240, "props": {} },
+    { "id": "ret", "kind": "Return", "x": 940, "y": 240, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "add", "toPin": "exec" },
+    { "fromNode": "add", "fromPin": "exec", "toNode": "print", "toPin": "exec" },
+    { "fromNode": "print", "fromPin": "exec", "toNode": "ret", "toPin": "exec" },
+    { "fromNode": "ten", "fromPin": "value", "toNode": "twice", "toPin": "value" },
+    { "fromNode": "twice", "fromPin": "result", "toNode": "add", "toPin": "a" },
+    { "fromNode": "twenty_two", "fromPin": "value", "toNode": "add", "toPin": "b" },
+    { "fromNode": "add", "fromPin": "result", "toNode": "print", "toPin": "value" }
+  ]
+}

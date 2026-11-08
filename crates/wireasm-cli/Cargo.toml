@@ -1,0 +1,12 @@
+[package]
+name = "wireasm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wireasm"
+path = "src/main.rs"
+
+[dependencies]
+wireasm-core = { path = "../wireasm-core" }

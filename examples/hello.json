@@ -1,0 +1,14 @@
+{
+  "name": "hello",
+  "target": "aarch64-macos",
+  "variables": [],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 80, "y": 240, "props": {} },
+    { "id": "msg", "kind": "PrintStr", "x": 380, "y": 210, "props": { "text": "Hello from WireASM!\n" } },
+    { "id": "ret", "kind": "Return", "x": 780, "y": 240, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "msg", "toPin": "exec" },
+    { "fromNode": "msg", "fromPin": "exec", "toNode": "ret", "toPin": "exec" }
+  ]
+}
