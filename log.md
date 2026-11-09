@@ -229,3 +229,31 @@ custom_nodes  42                    exit 0
   с понятным сообщением; подписи файловых диалогов переведены.
 - Репозиторий: `main`, два коммита (`4d01223`, `8b0a4a9`), рабочее дерево
   чистое. Remote не добавлен, `gh` авторизован как `DOKODS`.
+
+## 2026-11-09
+
+### Публикация на GitHub
+
+Репозиторий: https://github.com/DOKODS/wireasm (public). Ветка `main`, тег
+`v0.1.0`, релиз: https://github.com/DOKODS/wireasm/releases/tag/v0.1.0.
+
+Первый прогон CI упал, оба замечания исправлены коммитом `e215491`:
+
+1. `cargo clippy --workspace --all-targets -- -D warnings` ругался на
+   `Graph::default()` с присваиванием полей в тестовом хелпере `lib.rs`.
+   Заменено на структурный литерал с `..Graph::default()`.
+2. GitHub снял раннеры `macos-13` (retired) и `macos-14`
+   (`configuration not supported`). В workflow заменены на `macos-15-intel`
+   (Intel) и `macos-15` (Apple Silicon).
+
+Тег переставлен на исправленный коммит, старый прогон отменён.
+
+### Результат
+
+- CI на `main`: success, все три платформы (Ubuntu, Windows, macOS arm64).
+- Release на `v0.1.0`: success, 7 мин 43 с.
+- Четыре архива в релизе: `aarch64-macos`, `x86_64-macos`, `x86_64-linux`,
+  `x86_64-windows`; в каждом `wirestudio`, `wireasm`, README, LICENSE,
+  CHANGELOG.
+- Скачанный из релиза `aarch64-macos` проверен: `wireasm examples/hello.json
+  --run` печатает `Hello from WireASM!`, exit 0.

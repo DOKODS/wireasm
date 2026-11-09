@@ -179,6 +179,8 @@ Linux и Windows бинарники собираются в GitHub Actions; на
 
 ## Релизы
 
+Готовые сборки — [WireASM 0.1.0](https://github.com/DOKODS/wireasm/releases/tag/v0.1.0).
+
 `.github/workflows/release.yml` по тегу `v*` собирает архивы:
 
 - `wirestudio-0.1.0-aarch64-macos.tar.gz`
