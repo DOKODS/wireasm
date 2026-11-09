@@ -51,9 +51,11 @@ mod tests {
         nodes: &[(&str, &str)],
         edges: &[(&str, &str, &str, &str)],
     ) -> Graph {
-        let mut g = Graph::default();
-        g.name = "test".into();
-        g.target = "aarch64-macos".into();
+        let mut g = Graph {
+            name: "test".to_string(),
+            target: "aarch64-macos".to_string(),
+            ..Graph::default()
+        };
         for (id, kind) in nodes {
             g.nodes.push(Node {
                 id: (*id).into(),
