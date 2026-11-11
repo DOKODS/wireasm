@@ -11,6 +11,9 @@ pub struct Settings {
     pub lang: Option<String>,
     pub last_dir: Option<String>,
     pub out_dir: Option<String>,
+    /// Serial port and board used for AVR uploads.
+    pub avr_port: Option<String>,
+    pub avr_board: Option<String>,
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -57,6 +60,8 @@ impl Settings {
             lang: s("lang"),
             last_dir: s("lastDir"),
             out_dir: s("outDir"),
+            avr_port: s("avrPort"),
+            avr_board: s("avrBoard"),
         }
     }
 
@@ -74,6 +79,12 @@ impl Settings {
         }
         if let Some(dir) = &self.out_dir {
             m.insert("outDir".to_string(), Json::Str(dir.clone()));
+        }
+        if let Some(port) = &self.avr_port {
+            m.insert("avrPort".to_string(), Json::Str(port.clone()));
+        }
+        if let Some(board) = &self.avr_board {
+            m.insert("avrBoard".to_string(), Json::Str(board.clone()));
         }
         let _ = std::fs::write(path, Json::Obj(m).stringify_pretty());
     }

@@ -15,23 +15,32 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> String {
-    r#"WireASM 0.1.0 — visual assembler compiler
+    format!(
+        r#"WireASM {} — visual assembler compiler
 
 Usage:
   wireasm <graph.json> [options]
 
 Options:
   -o <file.s>        write assembler to a file (default: stdout)
-  --target <t>       aarch64-macos | aarch64-linux | x86_64-linux | x86_64-macos
+  --target <t>       aarch64-macos | aarch64-linux | x86_64-linux | x86_64-macos | avr-atmega328p
   --check            validate only, do not emit assembler
   --run              assemble for this host with clang and run (5 s limit)
+  --build            build AVR firmware (.elf/.hex/.bin) with avr-gcc
+  --out-dir <dir>    artifact directory for --build (default: out)
+  --flash <port>     build and upload the .hex with avrdude, e.g. /dev/cu.usbmodem14101
+  --board <name>     Arduino board for --flash: uno (default) or nano
+  --ports            list serial ports that look like an Arduino
   -h, --help         this text
 
 Examples:
   wireasm examples/sum_loop.json -o out/sum_loop.s
   wireasm examples/hello.json --run
-"#
-    .to_string()
+  wireasm examples/avr_blink.json --build
+  wireasm examples/avr_blink.json --flash /dev/cu.usbmodem14101 --board uno
+"#,
+        wireasm_core::VERSION
+    )
 }
 
 fn run() -> Result<u8, String> {
@@ -41,6 +50,10 @@ fn run() -> Result<u8, String> {
     let mut target: Option<String> = None;
     let mut check = false;
     let mut do_run = false;
+    let mut do_build = false;
+    let mut flash_port: Option<String> = None;
+    let mut board = "uno".to_string();
+    let mut out_dir = PathBuf::from("out");
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -54,10 +67,41 @@ fn run() -> Result<u8, String> {
                 ));
             }
             "--target" => {
-                target = Some(args.next().ok_or_else(|| "--target needs a value".to_string())?);
+                target = Some(
+                    args.next()
+                        .ok_or_else(|| "--target needs a value".to_string())?,
+                );
             }
             "--check" => check = true,
             "--run" => do_run = true,
+            "--build" => do_build = true,
+            "--flash" => {
+                flash_port = Some(
+                    args.next()
+                        .ok_or_else(|| "--flash needs a port".to_string())?,
+                )
+            }
+            "--board" => {
+                board = args
+                    .next()
+                    .ok_or_else(|| "--board needs a value".to_string())?
+            }
+            "--out-dir" => {
+                out_dir = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--out-dir needs a path".to_string())?,
+                )
+            }
+            "--ports" => {
+                let ports = toolchain::avr_ports();
+                if ports.is_empty() {
+                    println!("no serial ports found");
+                }
+                for p in ports {
+                    println!("{p}");
+                }
+                return Ok(0);
+            }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other}\n\n{}", usage()));
             }
@@ -115,6 +159,35 @@ fn run() -> Result<u8, String> {
             "wireasm: graph '{}' is valid for {} ({} nodes, {} edges)",
             g.name, g.target, out.stats.nodes, out.stats.edges
         );
+        return Ok(0);
+    }
+
+    if do_build || flash_port.is_some() {
+        let t = Target::parse(&g.target).unwrap();
+        if !t.is_avr() {
+            return Err(format!(
+                "--build/--flash only work for AVR targets, this graph targets {}",
+                t.as_str()
+            ));
+        }
+        let stem = wireasm_core::artifact_stem(&g);
+        let build = toolchain::build_avr(&out.asm, &out_dir, &stem)?;
+        eprintln!("wireasm: assembled {}", build.asm.display());
+        eprintln!("wireasm: firmware {}", build.elf.display());
+        eprintln!("wireasm: hex      {}", build.hex.display());
+        eprintln!("wireasm: binary   {}", build.bin.display());
+        if !build.size.trim().is_empty() {
+            eprintln!("{}", build.size.trim_end());
+        }
+        if let Some(port) = &flash_port {
+            eprintln!(
+                "wireasm: uploading {} to {port} ({board})",
+                build.hex.display()
+            );
+            let log = toolchain::flash_avr(&build.hex, port, &board)?;
+            eprintln!("{log}");
+            eprintln!("wireasm: upload finished");
+        }
         return Ok(0);
     }
 

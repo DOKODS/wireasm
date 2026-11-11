@@ -2,11 +2,7 @@ use super::*;
 use crate::model::*;
 use crate::validate::Diagnostic;
 
-pub fn generate(
-    g: &Graph,
-    t: Target,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<String, String> {
+pub fn generate(g: &Graph, t: Target, diags: &mut Vec<Diagnostic>) -> Result<String, String> {
     let mut cg = Cg {
         g,
         t,
@@ -191,7 +187,8 @@ impl<'a> Cg<'a> {
             }
             "RawAsm" => {
                 self.eval_input(&node, "a", 0)?;
-                self.em.ins(format!("mov [rbp-{}], rax", self.layout.arg(0)));
+                self.em
+                    .ins(format!("mov [rbp-{}], rax", self.layout.arg(0)));
                 match self.g.incoming(&node.id, "b") {
                     Some(e) => {
                         let src = e.from_node.clone();
@@ -258,17 +255,13 @@ impl<'a> Cg<'a> {
                 let inputs = def.u64_inputs();
                 for (i, p) in inputs.iter().enumerate() {
                     self.eval_input(&node, &p.name, 0)?;
-                    self.em.ins(format!(
-                        "mov [rbp-{}], rax",
-                        self.layout.arg(i)
-                    ));
+                    self.em
+                        .ins(format!("mov [rbp-{}], rax", self.layout.arg(i)));
                 }
                 let contract = ["rdi", "rsi", "rdx", "rcx", "r8", "r9", "r10", "r11"];
                 for (i, reg) in contract.iter().enumerate().take(inputs.len()) {
-                    self.em.ins(format!(
-                        "mov {reg}, [rbp-{}]",
-                        self.layout.arg(i)
-                    ));
+                    self.em
+                        .ins(format!("mov {reg}, [rbp-{}]", self.layout.arg(i)));
                 }
                 let regs: Vec<String> = contract[..inputs.len()]
                     .iter()
@@ -414,9 +407,10 @@ impl<'a> Cg<'a> {
             other if self.g.custom(other).is_some() => {
                 let def = self.g.custom(other).cloned().unwrap_or_default();
                 if def.has_exec_input() {
-                    let off = self.layout.custom_slot(&node.id).ok_or_else(|| {
-                        format!("custom node {} has no u64 output", node.id)
-                    })?;
+                    let off = self
+                        .layout
+                        .custom_slot(&node.id)
+                        .ok_or_else(|| format!("custom node {} has no u64 output", node.id))?;
                     self.em.ins(format!("mov rax, [rbp-{off}]"));
                 } else {
                     let inputs = def.u64_inputs();
@@ -446,8 +440,7 @@ impl<'a> Cg<'a> {
                         .collect();
                     let seq = self.next_inline();
                     let label = format!("Lcustom_{}_{seq}", sanitize(&node.id));
-                    let text =
-                        expand_custom_template(&def.asm_x86_64, &node, &regs, "rax", &label);
+                    let text = expand_custom_template(&def.asm_x86_64, &node, &regs, "rax", &label);
                     self.em.comment("custom node begin");
                     emit_snippet(&mut self.em, &text);
                     self.em.comment("custom node end");
@@ -498,7 +491,8 @@ impl<'a> Cg<'a> {
     fn emit_runtime(&mut self) {
         if uses_print_u64(self.g) {
             self.em.blank();
-            self.em.comment("runtime: print unsigned 64-bit decimal from rdi");
+            self.em
+                .comment("runtime: print unsigned 64-bit decimal from rdi");
             self.em.label("print_u64");
             self.em.ins("mov rax, rdi");
             self.em.ins("sub rsp, 80");

@@ -1,4 +1,4 @@
-# План WireASM / WireStudio 0.1.0
+# План WireASM / WireStudio 0.2.0
 
 ## Задача
 
@@ -25,16 +25,20 @@
 | Кросс-проверка | готово | 15 комбинаций граф × цель ассемблируются через `clang -c` |
 | Документация | готово | README, `docs/language.md`, план, журнал, changelog |
 | Релизная обвязка | готово | CI, release workflow, `releases/`, лицензия MIT |
+| Микроконтроллеры AVR | готово | `avr-atmega328p`, 11 MCU-узлов, `.elf/.hex/.bin`, `avrdude`, IDE-меню и F6/F7 |
+| Микроконтроллеры STM32 | не начато | нужен `arm-none-eabi-gcc`/`ld.lld` и `st-flash`/`dfu-util` |
 
 ## Проверено
 
-- `cargo test --workspace` — 12 тестов.
-- `cargo clippy --workspace --release` — без предупреждений.
+- `cargo test --workspace` — 16 тестов.
+- `cargo clippy --all-targets -- -D warnings` — без предупреждений.
 - `cargo build --release --workspace`.
-- Запуск всех примеров на `aarch64-macos`.
+- Запуск всех хост-примеров на `aarch64-macos`.
 - `clang -c` для ассемблера под `aarch64-linux`, `x86_64-linux`, `x86_64-macos`.
+- `avr-gcc -mmcu=atmega328p -Os` для `avr_blink` и `avr_uart_hello`; размеры
+  сняты `avr-size`. Загрузка в плату не проверялась — платы нет.
 
-## Что сознательно не входит в 0.1.0
+## Что сознательно не входит в 0.2.0
 
 - Типы кроме `u64`.
 - Функции, объявленные в графе.
@@ -43,6 +47,7 @@
 - Подпись и нотаризация macOS-сборок.
 - Запуск кросс-целей через эмулятор.
 - Совместная работа и серверная база проектов.
+- STM32 и другие Cortex-M: это следующий этап после AVR.
 
 ## Следующие шаги
 

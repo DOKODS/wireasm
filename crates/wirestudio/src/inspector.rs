@@ -17,6 +17,11 @@ const A64_REGS: &[&str] = &[
 const X64_REGS: &[&str] = &[
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
 ];
+const AVR_REGS: &[&str] = &[
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13", "r14",
+    "r15", "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23", "r24", "r25", "r26", "r27",
+    "r28", "r29", "r30", "r31",
+];
 
 impl WireStudio {
     // ------------------------------------------------------------- inspector
@@ -50,11 +55,7 @@ impl WireStudio {
                         ui.label(RichText::new(self.tr("inspector.kind")).small().weak());
                         ui.label(RichText::new(&node.kind).monospace());
                         ui.end_row();
-                        ui.label(
-                            RichText::new(self.tr("inspector.position"))
-                                .small()
-                                .weak(),
-                        );
+                        ui.label(RichText::new(self.tr("inspector.position")).small().weak());
                         ui.label(
                             RichText::new(format!("{:.0}, {:.0}", node.x, node.y)).monospace(),
                         );
@@ -84,8 +85,38 @@ impl WireStudio {
                         self.prop_text(&node.id, "text", "inspector.text", multiline, ui)
                     }
                     "Call" => self.prop_text(&node.id, "func", "inspector.function", false, ui),
-                    "Syscall" => self.prop_number(&node.id, "number", "inspector.syscall_number", ui),
+                    "Syscall" => {
+                        self.prop_number(&node.id, "number", "inspector.syscall_number", ui)
+                    }
                     "RegGet" | "RegSet" => self.prop_register(&node.id, ui),
+                    "McuPinMode" => {
+                        self.prop_range(&node.id, "pin", "inspector.pin", 0, 19, ui);
+                        self.prop_choice(
+                            &node.id,
+                            "mode",
+                            "inspector.pin_mode",
+                            &["out", "in", "pullup"],
+                            ui,
+                        );
+                        ui.label(RichText::new(self.tr("inspector.pin_hint")).small().weak());
+                    }
+                    "McuDigitalWrite" | "McuDigitalRead" => {
+                        self.prop_range(&node.id, "pin", "inspector.pin", 0, 19, ui);
+                        ui.label(RichText::new(self.tr("inspector.pin_hint")).small().weak());
+                    }
+                    "McuUartInit" => {
+                        self.prop_range(&node.id, "baud", "inspector.baud", 300, 1_000_000, ui)
+                    }
+                    "McuUartWriteStr" => {
+                        self.prop_text(&node.id, "text", "inspector.text", true, ui)
+                    }
+                    "McuAdcRead" => {
+                        self.prop_range(&node.id, "channel", "inspector.channel", 0, 7, ui)
+                    }
+                    "McuRegisterWrite" | "McuRegisterRead" => {
+                        self.prop_text(&node.id, "address", "inspector.address", false, ui);
+                        ui.label(RichText::new(self.tr("inspector.reg_hint")).small().weak());
+                    }
                     other if custom.is_some() => {
                         let def = custom.as_ref().expect("checked");
                         let keys = prop_keys(def);
@@ -95,9 +126,7 @@ impl WireStudio {
                             self.prop_text(&node.id, &key, &key, false, ui);
                         }
                         if !any {
-                            ui.label(
-                                RichText::new(self.tr("inspector.no_props")).small().weak(),
-                            );
+                            ui.label(RichText::new(self.tr("inspector.no_props")).small().weak());
                         }
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -134,14 +163,7 @@ impl WireStudio {
             });
     }
 
-    fn prop_text(
-        &mut self,
-        id: &str,
-        key: &str,
-        label: &str,
-        multiline: bool,
-        ui: &mut egui::Ui,
-    ) {
+    fn prop_text(&mut self, id: &str, key: &str, label: &str, multiline: bool, ui: &mut egui::Ui) {
         let mut value = self
             .graph
             .node(id)
@@ -177,6 +199,35 @@ impl WireStudio {
             .unwrap_or_default();
         ui.label(RichText::new(self.tr("inspector.value")).small().weak());
         let resp = ui.add(DragValue::new(&mut value).speed(1.0));
+        if resp.drag_started() || resp.gained_focus() {
+            self.snapshot();
+        }
+        if resp.changed() {
+            if let Some(node) = self.graph.node_mut(id) {
+                node.props.insert(key.to_string(), value.to_string());
+            }
+            self.touch();
+        }
+        ui.add_space(3.0);
+    }
+
+    fn prop_range(
+        &mut self,
+        id: &str,
+        key: &str,
+        label: &str,
+        min: u64,
+        max: u64,
+        ui: &mut egui::Ui,
+    ) {
+        let mut value = self
+            .graph
+            .node(id)
+            .map(|n| n.prop_u64(key))
+            .unwrap_or_default()
+            .clamp(min, max);
+        ui.label(RichText::new(self.tr(label)).small().weak());
+        let resp = ui.add(DragValue::new(&mut value).speed(1.0).range(min..=max));
         if resp.drag_started() || resp.gained_focus() {
             self.snapshot();
         }
@@ -251,11 +302,7 @@ impl WireStudio {
             .node(id)
             .map(|n| n.prop("name").to_string())
             .unwrap_or_default();
-        ui.label(
-            RichText::new(self.tr("inspector.var_name"))
-                .small()
-                .weak(),
-        );
+        ui.label(RichText::new(self.tr("inspector.var_name")).small().weak());
         if names.is_empty() {
             ui.label(RichText::new(self.tr("vars.empty")).small().weak());
         } else {
@@ -283,7 +330,9 @@ impl WireStudio {
 
     fn prop_register(&mut self, id: &str, ui: &mut egui::Ui) {
         let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
-        let regs = if target.is_aarch64() {
+        let regs = if target.is_avr() {
+            AVR_REGS
+        } else if target.is_aarch64() {
             A64_REGS
         } else {
             X64_REGS
@@ -293,11 +342,7 @@ impl WireStudio {
             .node(id)
             .map(|n| n.prop("reg").to_string())
             .unwrap_or_default();
-        ui.label(
-            RichText::new(self.tr("inspector.register"))
-                .small()
-                .weak(),
-        );
+        ui.label(RichText::new(self.tr("inspector.register")).small().weak());
         let mut pick = None;
         egui::ComboBox::from_id_salt(format!("reg_{id}"))
             .selected_text(current.clone())
@@ -342,9 +387,8 @@ impl WireStudio {
                     let mut init = self.graph.variables[i].init;
                     ui.horizontal(|ui| {
                         ui.label(self.tr("vars.name"));
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut name).desired_width(150.0),
-                        );
+                        let resp =
+                            ui.add(egui::TextEdit::singleline(&mut name).desired_width(150.0));
                         if resp.gained_focus() {
                             self.snapshot();
                         }
@@ -379,10 +423,9 @@ impl WireStudio {
                     if ui.button(self.tr("vars.add")).clicked() {
                         self.snapshot();
                         let name = self.unique_variable_name();
-                        self.graph.variables.push(wireasm_core::model::Variable {
-                            name,
-                            init: 0,
-                        });
+                        self.graph
+                            .variables
+                            .push(wireasm_core::model::Variable { name, init: 0 });
                         self.touch();
                     }
                     if ui.button(self.tr("vars.close")).clicked() {
@@ -452,22 +495,18 @@ impl WireStudio {
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
                         ui.label(self.tr("custom.kind"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut def.kind).desired_width(220.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut def.kind).desired_width(220.0));
                         ui.end_row();
                         ui.label(self.tr("custom.title"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut def.title).desired_width(300.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut def.title).desired_width(300.0));
                         ui.end_row();
                         ui.label(self.tr("custom.category"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut def.category).desired_width(220.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut def.category).desired_width(220.0));
                         ui.end_row();
                         ui.label(self.tr("custom.description"));
-                        ui.add(egui::TextEdit::singleline(&mut def.description).desired_width(360.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut def.description).desired_width(360.0),
+                        );
                         ui.end_row();
                     });
 

@@ -175,7 +175,8 @@ pub fn parse_u64(s: &str) -> Result<u64, String> {
     } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
         u64::from_str_radix(bin, 2).map_err(|e| format!("bad binary number '{s}': {e}"))
     } else {
-        s.parse::<u64>().map_err(|e| format!("bad number '{s}': {e}"))
+        s.parse::<u64>()
+            .map_err(|e| format!("bad number '{s}': {e}"))
     }
 }
 
@@ -294,7 +295,9 @@ impl<'a> Parser<'a> {
         self.expect(b'"')?;
         let mut out = String::new();
         loop {
-            let b = self.bump().ok_or_else(|| "unterminated string".to_string())?;
+            let b = self
+                .bump()
+                .ok_or_else(|| "unterminated string".to_string())?;
             match b {
                 b'"' => return Ok(out),
                 b'\\' => {
@@ -311,9 +314,7 @@ impl<'a> Parser<'a> {
                         b'u' => {
                             let mut code = 0u32;
                             for _ in 0..4 {
-                                let h = self
-                                    .bump()
-                                    .ok_or_else(|| "bad \\u escape".to_string())?;
+                                let h = self.bump().ok_or_else(|| "bad \\u escape".to_string())?;
                                 let d = (h as char)
                                     .to_digit(16)
                                     .ok_or_else(|| "bad \\u escape".to_string())?;
@@ -324,17 +325,15 @@ impl<'a> Parser<'a> {
                                 if self.bump() == Some(b'\\') && self.bump() == Some(b'u') {
                                     let mut low = 0u32;
                                     for _ in 0..4 {
-                                        let h = self.bump().ok_or_else(|| {
-                                            "bad surrogate pair".to_string()
-                                        })?;
+                                        let h = self
+                                            .bump()
+                                            .ok_or_else(|| "bad surrogate pair".to_string())?;
                                         low = low * 16
-                                            + (h as char).to_digit(16).ok_or_else(|| {
-                                                "bad surrogate pair".to_string()
-                                            })?;
+                                            + (h as char)
+                                                .to_digit(16)
+                                                .ok_or_else(|| "bad surrogate pair".to_string())?;
                                     }
-                                    code = 0x10000
-                                        + ((code - 0xD800) << 10)
-                                        + (low - 0xDC00);
+                                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
                                 } else {
                                     self.pos = save;
                                     code = 0xFFFD;

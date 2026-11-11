@@ -84,9 +84,7 @@ impl WireStudio {
         }
         let bw = (max.x - min.x + 120.0).max(320.0);
         let bh = (max.y - min.y + 120.0).max(240.0);
-        let zoom = (rect.width() / bw)
-            .min(rect.height() / bh)
-            .clamp(0.3, 1.5);
+        let zoom = (rect.width() / bw).min(rect.height() / bh).clamp(0.3, 1.5);
         self.view.zoom = zoom;
         let world_center = Pos2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
         self.view.pan = world_center.to_vec2() - (rect.size() * 0.5) / zoom;
@@ -132,10 +130,8 @@ impl WireStudio {
                 width = width.max(24.0 + view.chars().count() as f32 * 6.4);
             }
             let width = width.clamp(150.0, 320.0);
-            let height = HEADER
-                + rows as f32 * ROW
-                + if preview.is_some() { 20.0 } else { 0.0 }
-                + 12.0;
+            let height =
+                HEADER + rows as f32 * ROW + if preview.is_some() { 20.0 } else { 0.0 } + 12.0;
 
             let tl = self
                 .view
@@ -209,14 +205,20 @@ impl WireStudio {
     }
 
     fn draw_pending(&self, painter: &egui::Painter, layouts: &[NodeVis], ui: &egui::Ui) {
-        let Some(link) = &self.pending_link else { return };
+        let Some(link) = &self.pending_link else {
+            return;
+        };
         let Some(from) = find_pin(layouts, &link.from_node, &link.from_pin, false) else {
             return;
         };
         let Some(cursor) = ui.input(|i| i.pointer.hover_pos()) else {
             return;
         };
-        let color = if link.ty == TY_EXEC { EXEC_WIRE } else { DATA_WIRE };
+        let color = if link.ty == TY_EXEC {
+            EXEC_WIRE
+        } else {
+            DATA_WIRE
+        };
         bezier(painter, from.pos, cursor, Stroke::new(2.0, color));
         painter.circle_filled(cursor, 3.5, color);
     }
@@ -228,18 +230,25 @@ impl WireStudio {
         rect: Rect,
         layouts: &[NodeVis],
     ) {
-        let (pos, delta, primary_pressed, primary_down, primary_released, middle_down, secondary_down) =
-            ui.input(|i| {
-                (
-                    i.pointer.hover_pos(),
-                    i.pointer.delta(),
-                    i.pointer.primary_pressed(),
-                    i.pointer.primary_down(),
-                    i.pointer.primary_released(),
-                    i.pointer.button_down(egui::PointerButton::Middle),
-                    i.pointer.button_down(egui::PointerButton::Secondary),
-                )
-            });
+        let (
+            pos,
+            delta,
+            primary_pressed,
+            primary_down,
+            primary_released,
+            middle_down,
+            secondary_down,
+        ) = ui.input(|i| {
+            (
+                i.pointer.hover_pos(),
+                i.pointer.delta(),
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.primary_released(),
+                i.pointer.button_down(egui::PointerButton::Middle),
+                i.pointer.button_down(egui::PointerButton::Secondary),
+            )
+        });
         let scroll = ui.input(|i| i.smooth_scroll_delta);
         let zoom_delta = ui.input(|i| i.zoom_delta());
         let command = ui.input(|i| i.modifiers.command);
@@ -258,10 +267,9 @@ impl WireStudio {
             }
         }
 
-        if (middle_down || secondary_down)
-            && delta != Vec2::ZERO {
-                self.view.pan -= delta / self.view.zoom;
-            }
+        if (middle_down || secondary_down) && delta != Vec2::ZERO {
+            self.view.pan -= delta / self.view.zoom;
+        }
 
         // Drop a node dragged out of the palette.
         if let Some(kind) = self.palette_drag.clone() {
@@ -369,9 +377,7 @@ impl WireStudio {
     }
 
     pub fn add_node_centered(&mut self, kind: &str) {
-        let center = self
-            .view
-            .s2w(self.last_canvas, self.last_canvas.center());
+        let center = self.view.s2w(self.last_canvas, self.last_canvas.center());
         self.add_node_at(kind, center);
     }
 
@@ -437,11 +443,20 @@ impl WireStudio {
             )),
             "RegGet" | "RegSet" => Some((
                 "reg",
-                if target.is_aarch64() { "x0" } else { "rax" }.to_string(),
+                if target.is_avr() {
+                    "r24"
+                } else if target.is_aarch64() {
+                    "x0"
+                } else {
+                    "rax"
+                }
+                .to_string(),
             )),
             "RawAsm" => Some((
                 "text",
-                if target.is_aarch64() {
+                if target.is_avr() {
+                    "nop"
+                } else if target.is_aarch64() {
                     "add {a}, {a}, {b}"
                 } else {
                     "add {a}, {b}"
@@ -449,6 +464,13 @@ impl WireStudio {
                 .to_string(),
             )),
             "Comment" => Some(("text", String::new())),
+            "McuPinMode" => Some(("pin", "13".to_string())),
+            "McuDigitalWrite" => Some(("pin", "13".to_string())),
+            "McuDigitalRead" => Some(("pin", "2".to_string())),
+            "McuUartInit" => Some(("baud", "9600".to_string())),
+            "McuUartWriteStr" => Some(("text", "Hello from AVR!\\n".to_string())),
+            "McuAdcRead" => Some(("channel", "0".to_string())),
+            "McuRegisterWrite" | "McuRegisterRead" => Some(("address", "0x25".to_string())),
             _ => None,
         };
         if let Some((k, v)) = text {
@@ -496,6 +518,12 @@ fn preview_of(node: &Node) -> Option<String> {
         "Syscall" => format!("#{}", node.prop("number")),
         "RegGet" | "RegSet" => node.prop("reg").to_string(),
         "PrintStr" | "RawAsm" | "Comment" => node.prop("text").replace('\n', " "),
+        "McuPinMode" => format!("pin {} · {}", node.prop("pin"), node.prop("mode")),
+        "McuDigitalWrite" | "McuDigitalRead" => format!("pin {}", node.prop("pin")),
+        "McuUartInit" => format!("{} baud", node.prop("baud")),
+        "McuUartWriteStr" => node.prop("text").replace('\n', " "),
+        "McuAdcRead" => format!("A{}", node.prop("channel")),
+        "McuRegisterWrite" | "McuRegisterRead" => node.prop("address").to_string(),
         _ => return None,
     };
     if text.trim().is_empty() {
@@ -514,12 +542,7 @@ fn clip(s: &str, max: usize) -> String {
     out
 }
 
-fn find_pin<'a>(
-    layouts: &'a [NodeVis],
-    node: &str,
-    pin: &str,
-    input: bool,
-) -> Option<&'a PinVis> {
+fn find_pin<'a>(layouts: &'a [NodeVis], node: &str, pin: &str, input: bool) -> Option<&'a PinVis> {
     let vis = layouts.iter().find(|v| v.id == node)?;
     let list = if input { &vis.inputs } else { &vis.outputs };
     list.iter().find(|p| p.name == pin)
@@ -615,10 +638,7 @@ fn draw_node(
     };
     painter.rect_stroke(vis.rect, radius, stroke, StrokeKind::Outside);
 
-    let header = Rect::from_min_size(
-        vis.rect.min,
-        egui::vec2(vis.rect.width(), HEADER * zoom),
-    );
+    let header = Rect::from_min_size(vis.rect.min, egui::vec2(vis.rect.width(), HEADER * zoom));
     let header_radius = CornerRadius {
         nw: radius.nw,
         ne: radius.ne,
@@ -675,5 +695,3 @@ fn draw_node(
         );
     }
 }
-
-

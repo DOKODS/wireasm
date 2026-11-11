@@ -4,7 +4,10 @@
 # generated and packaged binaries
 /out/*.exe
 /out/*.bin
+/out/*.elf
+/out/*.hex
 /out/wireasm-*
+/dist/
 /releases/*
 !/releases/README.md
 

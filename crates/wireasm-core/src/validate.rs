@@ -86,13 +86,14 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
             d.push(Diagnostic::error(
                 None,
                 format!(
-                    "unknown target '{}' (use aarch64-macos, aarch64-linux, x86_64-linux, x86_64-macos)",
+                    "unknown target '{}' (use aarch64-macos, aarch64-linux, x86_64-linux, x86_64-macos or avr-atmega328p)",
                     g.target
                 ),
             ));
             None
         }
     };
+    let avr = target.map(|t| t.is_avr()).unwrap_or(false);
 
     for e in &g.edges {
         let from = match kinds.get(e.from_node.as_str()) {
@@ -184,9 +185,7 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
         if *count > 1 {
             d.push(Diagnostic::error(
                 Some(node),
-                format!(
-                    "exec output '{pin}' has {count} connections (only one allowed)"
-                ),
+                format!("exec output '{pin}' has {count} connections (only one allowed)"),
             ));
         }
     }
@@ -226,14 +225,20 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
                         Some(&n.id),
                         format!("constant '{}' is not a valid u64", n.prop("value")),
                     ));
+                } else if avr && n.prop_u64("value") > 0xffff {
+                    d.push(Diagnostic::warning(
+                        Some(&n.id),
+                        format!(
+                            "value {} does not fit into the AVR 16-bit accumulator; it will be truncated to {}",
+                            n.prop_u64("value"),
+                            n.prop_u64("value") & 0xffff
+                        ),
+                    ));
                 }
             }
             "VarGet" | "VarSet" => {
                 if n.prop("name").trim().is_empty() {
-                    d.push(Diagnostic::error(
-                        Some(&n.id),
-                        "variable name is empty",
-                    ));
+                    d.push(Diagnostic::error(Some(&n.id), "variable name is empty"));
                 }
             }
             "BinOp" => {
@@ -251,19 +256,13 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
                 if !is_cmp_op(n.prop("op")) {
                     d.push(Diagnostic::error(
                         Some(&n.id),
-                        format!(
-                            "unknown compare op '{}' (eq ne lt le gt ge)",
-                            n.prop("op")
-                        ),
+                        format!("unknown compare op '{}' (eq ne lt le gt ge)", n.prop("op")),
                     ));
                 }
             }
             "RegGet" | "RegSet" => {
                 if n.prop("reg").trim().is_empty() {
-                    d.push(Diagnostic::error(
-                        Some(&n.id),
-                        "register name is empty",
-                    ));
+                    d.push(Diagnostic::error(Some(&n.id), "register name is empty"));
                 } else if let Some(t) = target {
                     if !valid_register(t, n.prop("reg")) {
                         d.push(Diagnostic::warning(
@@ -278,12 +277,22 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
                 }
             }
             "Call" => {
-                if n.prop("func").trim().is_empty() {
+                if avr {
+                    d.push(Diagnostic::error(
+                        Some(&n.id),
+                        "Call is not available on AVR: there is no host ABI to call into",
+                    ));
+                } else if n.prop("func").trim().is_empty() {
                     d.push(Diagnostic::error(Some(&n.id), "function name is empty"));
                 }
             }
             "Syscall" => {
-                if n.prop("number").trim().is_empty() {
+                if avr {
+                    d.push(Diagnostic::error(
+                        Some(&n.id),
+                        "Syscall is not available on AVR: microcontrollers have no operating system",
+                    ));
+                } else if n.prop("number").trim().is_empty() {
                     d.push(Diagnostic::error(Some(&n.id), "syscall number is empty"));
                 } else if crate::json::parse_u64(n.prop("number")).is_err() {
                     d.push(Diagnostic::error(
@@ -294,6 +303,81 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
             }
             "RawAsm" if n.prop("text").trim().is_empty() => {
                 d.push(Diagnostic::error(Some(&n.id), "raw assembly text is empty"));
+            }
+            kind if is_mcu_kind(kind) => {
+                if !avr {
+                    d.push(Diagnostic::error(
+                        Some(&n.id),
+                        format!("'{kind}' is an MCU node: set the target to avr-atmega328p"),
+                    ));
+                }
+                match kind {
+                    "McuPinMode" => {
+                        check_pin(&n.id, n.prop_u64("pin"), &mut d);
+                        let mode = n.prop("mode").trim();
+                        if !matches!(mode, "out" | "in" | "pullup") {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                format!("unknown pin mode '{mode}' (out, in, pullup)"),
+                            ));
+                        }
+                    }
+                    "McuDigitalWrite" | "McuDigitalRead" => {
+                        check_pin(&n.id, n.prop_u64("pin"), &mut d);
+                    }
+                    "McuAdcRead" => {
+                        let ch = n.prop_u64("channel");
+                        if ch > 7 {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                format!("ADC channel {ch} is out of range (0..7)"),
+                            ));
+                        }
+                    }
+                    "McuUartInit" => {
+                        let baud = n.prop_u64("baud");
+                        if baud == 0 {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                "baud rate must be greater than zero",
+                            ));
+                        } else if baud > 115_200 {
+                            d.push(Diagnostic::warning(
+                                Some(&n.id),
+                                format!(
+                                    "baud rate {baud} is above 115200; the AVR may not keep up"
+                                ),
+                            ));
+                        }
+                    }
+                    "McuRegisterWrite" | "McuRegisterRead" => {
+                        if n.prop("address").trim().is_empty() {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                "data address is empty (use 0x25, 0xC6, …)",
+                            ));
+                        } else if crate::json::parse_u64(n.prop("address"))
+                            .map(|a| a > 0xffff)
+                            .unwrap_or(true)
+                        {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                format!("'{}' is not a 16-bit data address", n.prop("address")),
+                            ));
+                        } else if n.prop_u64("address") < 0x20 {
+                            d.push(Diagnostic::error(
+                                Some(&n.id),
+                                format!(
+                                    "address 0x{:02X} is below 0x20: lds/sts need data-space addresses (I/O 0x{:02X} maps to 0x{:02X})",
+                                    n.prop_u64("address"),
+                                    n.prop_u64("address"),
+                                    n.prop_u64("address") + 0x20
+                                ),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }
@@ -416,6 +500,18 @@ pub fn validate(g: &Graph) -> Vec<Diagnostic> {
 
 fn validate_custom_nodes(g: &Graph, d: &mut Vec<Diagnostic>) {
     let target = Target::parse(&g.target);
+    if target.map(|t| t.is_avr()).unwrap_or(false) {
+        for def in &g.custom_nodes {
+            d.push(Diagnostic::error(
+                None,
+                format!(
+                    "custom node '{}': custom-nodes have no AVR assembler template yet",
+                    def.kind
+                ),
+            ));
+        }
+        return;
+    }
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for def in &g.custom_nodes {
         let label = format!("custom node '{}'", def.kind);
@@ -541,7 +637,7 @@ fn validate_custom_nodes(g: &Graph, d: &mut Vec<Diagnostic>) {
         if u64_outputs > 1 {
             d.push(Diagnostic::error(
                 None,
-                format!("{label}: version 0.1.0 supports at most one u64 output"),
+                format!("{label}: version 0.2.0 supports at most one u64 output"),
             ));
         }
         if exec_inputs == 0 && u64_outputs == 0 {
@@ -558,18 +654,8 @@ fn validate_custom_nodes(g: &Graph, d: &mut Vec<Diagnostic>) {
         }
 
         let (arch, text, other, other_arch) = match target {
-            Some(t) if !t.is_aarch64() => (
-                "x86_64",
-                &def.asm_x86_64,
-                &def.asm_aarch64,
-                "aarch64",
-            ),
-            _ => (
-                "aarch64",
-                &def.asm_aarch64,
-                &def.asm_x86_64,
-                "x86_64",
-            ),
+            Some(t) if !t.is_aarch64() => ("x86_64", &def.asm_x86_64, &def.asm_aarch64, "aarch64"),
+            _ => ("aarch64", &def.asm_aarch64, &def.asm_x86_64, "x86_64"),
         };
         if text.trim().is_empty() {
             d.push(Diagnostic::error(
@@ -597,8 +683,28 @@ fn valid_custom_kind(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+fn is_mcu_kind(kind: &str) -> bool {
+    kind.starts_with("Mcu")
+}
+
+fn check_pin(node: &str, pin: u64, d: &mut Vec<Diagnostic>) {
+    if pin > 19 {
+        d.push(Diagnostic::error(
+            Some(node),
+            format!("Arduino pin {pin} is out of range (0..19)"),
+        ));
+    }
+}
+
 fn valid_register(t: Target, reg: &str) -> bool {
     let r = reg.trim().trim_start_matches('%');
+    if t.is_avr() {
+        return r
+            .strip_prefix('r')
+            .and_then(|n| n.parse::<u8>().ok())
+            .map(|n| n <= 31)
+            .unwrap_or(false);
+    }
     if t.is_aarch64() {
         let aliases = ["sp", "fp", "lr", "xzr", "wzr"];
         if aliases.contains(&r) {
@@ -620,8 +726,8 @@ fn valid_register(t: Target, reg: &str) -> bool {
             return true;
         }
         let names32 = [
-            "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "r8d", "r9d", "r10d",
-            "r11d", "r12d", "r13d", "r14d", "r15d",
+            "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "r8d", "r9d", "r10d", "r11d",
+            "r12d", "r13d", "r14d", "r15d",
         ];
         names32.contains(&r)
     }

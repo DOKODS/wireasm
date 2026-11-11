@@ -1,4 +1,4 @@
-# Журнал WireASM / WireStudio 0.1.0
+# Журнал WireASM / WireStudio 0.2.0
 
 ## 2026-11-07
 
@@ -257,3 +257,64 @@ custom_nodes  42                    exit 0
   CHANGELOG.
 - Скачанный из релиза `aarch64-macos` проверен: `wireasm examples/hello.json
   --run` печатает `Hello from WireASM!`, exit 0.
+
+## 2026-11-11
+
+### Микроконтроллеры: AVR (ATmega328P)
+
+Задача: добавить в WireASM/WireStudio программирование микроконтроллеров —
+отдельные MCU-узлы, генерацию прошивки и загрузку в плату. Порядок: сначала
+AVR (Arduino Uno/Nano), STM32 — следующим этапом.
+
+Сделано:
+
+- `Target::AvrAtmega328p` (`avr-atmega328p`, синонимы `avr`, `atmega328p`,
+  `arduino-uno`, `arduino-nano`), точка входа `main`.
+- 11 MCU-узлов: `McuPinMode`, `McuDigitalWrite/Read`, `McuDelayMs/Us`,
+  `McuUartInit/Write/WriteStr`, `McuAdcRead`, `McuRegisterWrite/Read`.
+- `codegen/avr.rs`: 16-битная арифметика в `r24:r25`, переменные и временные в
+  `.bss`, строки в `.data`, встроенные `delay_ms`, `delay_us`, `uart_write_byte`,
+  `uart_write_str`, `uart_print_u16`, `udiv16`; комментарии `;`.
+- `PrintU64`/`PrintStr` на AVR выводят в UART0; пролог включает 9600 бод, если
+  явного `McuUartInit` нет.
+- Валидатор: пины 0–19, режимы out/in/pullup, каналы АЦП 0–7, baud > 0,
+  адреса 0..0xFFFF, запрет `Call`/`Syscall`/своих узлов на AVR, предупреждение
+  об усечении `Const` до 16 бит и о baud > 115200.
+- `toolchain.rs`: поиск `avr-gcc`/`avr-objcopy`/`avr-size`/`avrdude` в PATH,
+  Arduino15 (`~/Library/Arduino15/...`, `~/.arduino15/...`, `%LOCALAPPDATA%`)
+  и PlatformIO; `build_avr`, `flash_avr` (`avrdude -c arduino`), `avr_ports`.
+- CLI: `--build`, `--out-dir`, `--flash <port>`, `--board uno|nano`, `--ports`.
+- WireStudio: меню «Микроконтроллер», группа MCU в палитре (появляется на
+  AVR-цели), редакторы пина/режима/baud/канала/адреса, регистры `r0..r31`,
+  окно «Плата и программатор» (порт, плата, папка), F6 — собрать прошивку,
+  F7 — прошить, примеры `avr_blink` и `avr_uart` в меню «Примеры».
+- Примеры `examples/avr_blink.json`, `examples/avr_uart_hello.json`.
+
+Проверено:
+
+- `cargo test --workspace` — 16 из 16. `cargo clippy --all-targets -- -D warnings`
+  чисто. `cargo fmt --all`.
+- `wireasm examples/avr_blink.json --build` → `.s/.elf/.hex/.bin`; `avr-size`:
+  text 222, bss 132.
+- `wireasm examples/avr_uart_hello.json` → `avr-gcc` линкует; `avr-size`:
+  text 224, data 26, bss 132.
+- `wireasm --ports` отрабатывает (на машине Arduino не подключена, портов нет).
+- WireStudio запускается (процесс живёт, окно открывается).
+
+Не проверено: реальная загрузка в плату и работа на кристалле — платы под рукой
+нет. STM32 не начат: нужен `arm-none-eabi-gcc` (или `ld.lld`) и
+`st-flash`/`dfu-util`, их на машине нет.
+
+### Выпуск 0.2.0
+
+- Версия поднята до `0.2.0`: `Cargo.toml`, `VERSION` в ядре, текст `--help`
+  (теперь берётся из `VERSION`), сообщения валидатора, README, `docs/language.md`,
+  план, журнал, `CHANGELOG.md` (`[0.2.0] — 2026-11-11`), имена архивов в
+  `release.yml` и `releases/README.md`. Папка проекта переименована в
+  `WIREASM_AARCH64_X86_0.2.0`.
+- Локальная сборка `aarch64-macos`: `releases/wirestudio-0.2.0-aarch64-macos.tar.gz`.
+  Проверено из архива: `wireasm --help` показывает 0.2.0, `hello.json --run`
+  печатает `Hello from WireASM!` с кодом 0.
+- Повторная проверка AVR: `avr_blink` — text 222, bss 132 (в прошлой записи
+  было 218 — это до замены `tst` на `or`); `avr_uart_hello` — text 224,
+  data 26, bss 132.

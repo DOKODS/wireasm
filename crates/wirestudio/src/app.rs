@@ -15,7 +15,11 @@ use crate::i18n::{t, Lang};
 use crate::settings::Settings;
 
 pub const EXAMPLES: &[(&str, &str, &str)] = &[
-    ("hello", "example.hello", include_str!("../../../examples/hello.json")),
+    (
+        "hello",
+        "example.hello",
+        include_str!("../../../examples/hello.json"),
+    ),
     (
         "sum_loop",
         "example.sum_loop",
@@ -35,6 +39,16 @@ pub const EXAMPLES: &[(&str, &str, &str)] = &[
         "custom_nodes",
         "example.custom_nodes",
         include_str!("../../../examples/custom_nodes.json"),
+    ),
+    (
+        "avr_blink",
+        "example.avr_blink",
+        include_str!("../../../examples/avr_blink.json"),
+    ),
+    (
+        "avr_uart",
+        "example.avr_uart",
+        include_str!("../../../examples/avr_uart_hello.json"),
     ),
 ];
 
@@ -95,6 +109,14 @@ pub enum BottomTab {
 pub struct Job {
     pub rx: Receiver<Result<String, String>>,
     pub started: Instant,
+    pub kind: JobKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobKind {
+    Run,
+    Build,
+    Flash,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +190,9 @@ pub enum Action {
     ZoomOut,
     Compile,
     BuildRun,
+    BuildFirmware,
+    FlashFirmware,
+    BoardSettings,
     Variables,
     NewCustom,
     Shortcuts,
@@ -199,6 +224,8 @@ pub struct WireStudio {
     pub confirm: Option<Confirm>,
     pub show_about: bool,
     pub show_shortcuts: bool,
+    pub board_open: bool,
+    pub avr_ports: Vec<String>,
     pub allow_close: bool,
     pub job: Option<Job>,
     pub undo: Vec<String>,
@@ -242,6 +269,8 @@ impl WireStudio {
             confirm: None,
             show_about: false,
             show_shortcuts: false,
+            board_open: false,
+            avr_ports: Vec::new(),
             allow_close: false,
             job: None,
             undo: Vec::new(),
@@ -284,7 +313,8 @@ impl WireStudio {
     }
 
     pub fn snapshot(&mut self) {
-        self.undo.push(self.graph.to_json_value().stringify_pretty());
+        self.undo
+            .push(self.graph.to_json_value().stringify_pretty());
         if self.undo.len() > 200 {
             self.undo.remove(0);
         }
@@ -304,7 +334,9 @@ impl WireStudio {
                         .unwrap_or_else(|| Path::new("."))
                         .join(format!("{stem}.s"));
                     if std::fs::write(&asm, &self.out.asm).is_ok() {
-                        self.status = self.tr("status.auto_saved").replace("{}", &asm.display().to_string());
+                        self.status = self
+                            .tr("status.auto_saved")
+                            .replace("{}", &asm.display().to_string());
                     }
                 }
             } else {
@@ -314,7 +346,9 @@ impl WireStudio {
                     .iter()
                     .filter(|d| d.severity == Severity::Error)
                     .count();
-                self.status = self.tr("status.compile_failed").replace("{}", &errors.to_string());
+                self.status = self
+                    .tr("status.compile_failed")
+                    .replace("{}", &errors.to_string());
                 self.tab = BottomTab::Problems;
             }
         }
@@ -333,7 +367,11 @@ impl WireStudio {
             .last_dir
             .as_ref()
             .map(PathBuf::from)
-            .or_else(|| self.path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf())))
+            .or_else(|| {
+                self.path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            })
     }
 
     fn remember_dir(&mut self, path: &Path) {
@@ -404,9 +442,10 @@ impl WireStudio {
         self.remember_dir(&path);
         self.path = Some(path.clone());
         self.dirty = false;
-        self.status = self.tr("status.saved").replace("{}", &path.display().to_string());
-        self.console
-            .push(self.status.clone());
+        self.status = self
+            .tr("status.saved")
+            .replace("{}", &path.display().to_string());
+        self.console.push(self.status.clone());
         true
     }
 
@@ -440,7 +479,9 @@ impl WireStudio {
                 } else {
                     BottomTab::Problems
                 };
-                self.status = self.tr("status.opened").replace("{}", &path.display().to_string());
+                self.status = self
+                    .tr("status.opened")
+                    .replace("{}", &path.display().to_string());
                 self.console.push(self.status.clone());
             }
             Err(e) => self.error(format!("{}: {e}", path.display())),
@@ -456,12 +497,20 @@ impl WireStudio {
     }
 
     fn load_example(&mut self, idx: usize) {
-        let Some((_, _, src)) = EXAMPLES.get(idx) else { return };
+        let Some((_, _, src)) = EXAMPLES.get(idx) else {
+            return;
+        };
         let parsed = Json::parse(src).and_then(|v| Graph::from_json_value(&v));
         match parsed {
             Ok(mut graph) => {
-                if let Some(host) = toolchain::host_target() {
-                    graph.target = host.as_str().to_string();
+                // Host examples follow the machine; AVR examples keep their MCU target.
+                if Target::parse(&graph.target)
+                    .map(|t| !t.is_avr())
+                    .unwrap_or(true)
+                {
+                    if let Some(host) = toolchain::host_target() {
+                        graph.target = host.as_str().to_string();
+                    }
                 }
                 self.graph = graph;
                 self.path = None;
@@ -558,7 +607,9 @@ impl WireStudio {
             let lib = self.graph.as_library();
             match std::fs::write(&path, lib.to_json_value().stringify_pretty()) {
                 Ok(()) => {
-                    self.status = self.tr("status.exported_lib").replace("{}", &path.display().to_string());
+                    self.status = self
+                        .tr("status.exported_lib")
+                        .replace("{}", &path.display().to_string());
                     self.console.push(self.status.clone());
                 }
                 Err(e) => self.error(format!("{}: {e}", path.display())),
@@ -601,20 +652,23 @@ impl WireStudio {
             asm_x86_64: text,
         };
         self.custom_editor = Some(CustomEditor::new(Some(def)));
-        self.status = self
-            .tr("status.imported_asm")
-            .replace("{}", &stem);
+        self.status = self.tr("status.imported_asm").replace("{}", &stem);
         self.console.push(self.status.clone());
     }
 
-    pub fn save_custom_def(&mut self, original: Option<String>, def: CustomNodeDef) -> Result<(), String> {
+    pub fn save_custom_def(
+        &mut self,
+        original: Option<String>,
+        def: CustomNodeDef,
+    ) -> Result<(), String> {
         if def.kind.trim().is_empty() || !valid_kind(&def.kind) {
             return Err(self.tr("custom.error_kind").to_string());
         }
         if pins_for(&def.kind).is_some() {
             return Err(self.tr("custom.error_builtin").to_string());
         }
-        if original.as_deref() != Some(def.kind.as_str()) && self.graph.custom(&def.kind).is_some() {
+        if original.as_deref() != Some(def.kind.as_str()) && self.graph.custom(&def.kind).is_some()
+        {
             return Err(self.tr("custom.error_exists").to_string());
         }
         if def.asm_aarch64.trim().is_empty() || def.asm_x86_64.trim().is_empty() {
@@ -727,6 +781,9 @@ impl WireStudio {
             }
             Action::Compile => self.compile_now(true),
             Action::BuildRun => self.build_run(ctx),
+            Action::BuildFirmware => self.firmware_job(ctx, false),
+            Action::FlashFirmware => self.firmware_job(ctx, true),
+            Action::BoardSettings => self.open_board_settings(),
             Action::Variables => self.variables_open = true,
             Action::NewCustom => self.custom_editor = Some(CustomEditor::new(None)),
             Action::Shortcuts => self.show_shortcuts = true,
@@ -785,9 +842,13 @@ impl WireStudio {
     }
 
     pub fn delete_selected(&mut self) {
-        let Some(id) = self.selected.clone() else { return };
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
         self.snapshot();
-        self.graph.edges.retain(|e| e.from_node != id && e.to_node != id);
+        self.graph
+            .edges
+            .retain(|e| e.from_node != id && e.to_node != id);
         self.graph.nodes.retain(|n| n.id != id);
         self.selected = None;
         self.pending_link = None;
@@ -811,9 +872,7 @@ impl WireStudio {
             return;
         };
         if !toolchain::can_build(target) {
-            self.status = self
-                .tr("status.host_only")
-                .replace("{}", target.as_str());
+            self.status = self.tr("status.host_only").replace("{}", target.as_str());
             return;
         }
         let asm = self.out.asm.clone();
@@ -836,7 +895,9 @@ impl WireStudio {
                 }
                 log.push_str(&format!(
                     "[exit {}]\n",
-                    run.status.map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
+                    run.status
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "signal".to_string())
                 ));
                 Ok(log)
             })();
@@ -845,23 +906,138 @@ impl WireStudio {
         self.job = Some(Job {
             rx,
             started: Instant::now(),
+            kind: JobKind::Run,
         });
         self.status = self.tr("status.running").to_string();
         self.tab = BottomTab::Console;
         ctx.request_repaint();
     }
 
+    // ------------------------------------------------------- build firmware
+
+    fn open_board_settings(&mut self) {
+        self.avr_ports = toolchain::avr_ports();
+        if self.settings.avr_port.is_none() {
+            self.settings.avr_port = self.avr_ports.first().cloned();
+        }
+        if self.settings.avr_board.is_none() {
+            self.settings.avr_board = Some("uno".to_string());
+        }
+        self.board_open = true;
+    }
+
+    fn firmware_dir(&self) -> PathBuf {
+        if let Some(dir) = &self.settings.out_dir {
+            return PathBuf::from(dir);
+        }
+        self.path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.join("out")))
+            .unwrap_or_else(|| PathBuf::from("out"))
+    }
+
+    /// Compile the graph to AVR assembler, then build `.elf/.hex/.bin` with
+    /// avr-gcc and, when `flash` is set, upload the hex with avrdude.
+    fn firmware_job(&mut self, ctx: &egui::Context, flash: bool) {
+        self.compile_now(false);
+        if !self.out.ok {
+            self.status = self
+                .tr("status.compile_failed")
+                .replace("{}", &self.out.diagnostics.len().to_string());
+            self.tab = BottomTab::Problems;
+            return;
+        }
+        let Some(target) = Target::parse(&self.graph.target) else {
+            self.error(self.tr("status.unknown_target"));
+            return;
+        };
+        if !target.is_avr() {
+            self.status = self.tr("status.avr_only").to_string();
+            self.console.push(self.status.clone());
+            return;
+        }
+        if toolchain::avr_tools().is_none() {
+            self.status = self.tr("status.no_toolchain").to_string();
+            self.console.push(self.status.clone());
+            self.tab = BottomTab::Console;
+            return;
+        }
+        let port = self.settings.avr_port.clone();
+        if flash && port.is_none() {
+            self.status = self.tr("status.need_port").to_string();
+            self.open_board_settings();
+            return;
+        }
+        let asm = self.out.asm.clone();
+        let stem = artifact_stem(&self.graph);
+        let out_dir = self.firmware_dir();
+        let board = self
+            .settings
+            .avr_board
+            .clone()
+            .unwrap_or_else(|| "uno".to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<String, String> {
+                let build = toolchain::build_avr(&asm, &out_dir, &stem)?;
+                let mut log = String::new();
+                log.push_str(&format!("$ avr-gcc -mmcu=atmega328p -Os {stem}.s\n"));
+                if !build.size.trim().is_empty() {
+                    log.push_str(build.size.trim_end());
+                    log.push('\n');
+                }
+                log.push_str(&format!("[asm] {}\n", build.asm.display()));
+                log.push_str(&format!("[elf] {}\n", build.elf.display()));
+                log.push_str(&format!("[hex] {}\n", build.hex.display()));
+                log.push_str(&format!("[bin] {}\n", build.bin.display()));
+                if let Some(port) = port {
+                    log.push_str(&format!(
+                        "$ avrdude -p m328p -c arduino -P {port} ({board})\n"
+                    ));
+                    let out = toolchain::flash_avr(&build.hex, &port, &board)?;
+                    log.push_str(&out);
+                    log.push_str("\n[upload ok]\n");
+                }
+                Ok(log)
+            })();
+            let _ = tx.send(result);
+        });
+        self.job = Some(Job {
+            rx,
+            started: Instant::now(),
+            kind: if flash {
+                JobKind::Flash
+            } else {
+                JobKind::Build
+            },
+        });
+        self.status = self
+            .tr(if flash {
+                "status.flashing"
+            } else {
+                "status.building_fw"
+            })
+            .to_string();
+        self.tab = BottomTab::Console;
+        ctx.request_repaint();
+    }
+
     fn poll_job(&mut self, ctx: &egui::Context) {
         let Some(job) = &self.job else { return };
+        let kind = job.kind;
         match job.rx.try_recv() {
             Ok(Ok(log)) => {
                 self.job = None;
                 for line in log.lines() {
                     self.console.push(line.to_string());
                 }
-                self.status = self
-                    .tr("status.run_done")
-                    .replace("{}", &exit_code_of(&log));
+                self.status = match kind {
+                    JobKind::Run => self
+                        .tr("status.run_done")
+                        .replace("{}", &exit_code_of(&log)),
+                    JobKind::Build => self.tr("status.build_done").to_string(),
+                    JobKind::Flash => self.tr("status.flash_done").to_string(),
+                };
                 self.tab = BottomTab::Console;
             }
             Ok(Err(e)) => {
@@ -869,7 +1045,11 @@ impl WireStudio {
                 for line in e.lines() {
                     self.console.push(line.to_string());
                 }
-                self.status = self.tr("status.run_failed").to_string();
+                self.status = match kind {
+                    JobKind::Run => self.tr("status.run_failed").to_string(),
+                    JobKind::Build => self.tr("status.build_failed").to_string(),
+                    JobKind::Flash => self.tr("status.flash_failed").to_string(),
+                };
                 self.tab = BottomTab::Console;
             }
             Err(TryRecvError::Empty) => {
@@ -934,6 +1114,10 @@ impl WireStudio {
                 action = Some(Action::Compile);
             } else if i.key_pressed(egui::Key::F5) {
                 action = Some(Action::BuildRun);
+            } else if i.key_pressed(egui::Key::F6) {
+                action = Some(Action::BuildFirmware);
+            } else if i.key_pressed(egui::Key::F7) {
+                action = Some(Action::FlashFirmware);
             } else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
                 action = Some(Action::Delete);
             } else if i.key_pressed(egui::Key::F) {
@@ -1053,6 +1237,25 @@ impl WireStudio {
                         ui.close();
                     }
                 });
+                ui.menu_button(s("menu.mcu"), |ui| {
+                    if ui.button(s("mcu.use_avr")).clicked() {
+                        action = Some(Action::SetTarget(Target::AvrAtmega328p));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(s("toolbar.build_fw")).clicked() {
+                        action = Some(Action::BuildFirmware);
+                        ui.close();
+                    }
+                    if ui.button(s("toolbar.flash")).clicked() {
+                        action = Some(Action::FlashFirmware);
+                        ui.close();
+                    }
+                    if ui.button(s("mcu.board_settings")).clicked() {
+                        action = Some(Action::BoardSettings);
+                        ui.close();
+                    }
+                });
                 ui.menu_button(s("menu.nodes"), |ui| {
                     if ui.button(s("edit.custom_node")).clicked() {
                         action = Some(Action::NewCustom);
@@ -1094,10 +1297,7 @@ impl WireStudio {
                         ui.close();
                     }
                     for l in [Lang::En, Lang::Ru] {
-                        if ui
-                            .selectable_label(self.lang == l, l.label())
-                            .clicked()
-                        {
+                        if ui.selectable_label(self.lang == l, l.label()).clicked() {
                             action = Some(Action::SetLang(Some(l)));
                             ui.close();
                         }
@@ -1128,6 +1328,17 @@ impl WireStudio {
                 }
                 if ui.button(s("toolbar.run")).clicked() {
                     action = Some(Action::BuildRun);
+                }
+                if Target::parse(&self.graph.target)
+                    .map(|t| t.is_avr())
+                    .unwrap_or(false)
+                {
+                    if ui.button(s("toolbar.build_fw")).clicked() {
+                        action = Some(Action::BuildFirmware);
+                    }
+                    if ui.button(s("toolbar.flash")).clicked() {
+                        action = Some(Action::FlashFirmware);
+                    }
                 }
                 ui.separator();
                 ui.label(s("toolbar.target"));
@@ -1187,13 +1398,9 @@ impl WireStudio {
                 ui.label(RichText::new(&self.status).small());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            self.graph.target,
-                            self.out.stats.lines
-                        ))
-                        .small()
-                        .weak(),
+                        RichText::new(format!("{} · {}", self.graph.target, self.out.stats.lines))
+                            .small()
+                            .weak(),
                     );
                 });
             });
@@ -1238,28 +1445,26 @@ impl WireStudio {
                     {
                         self.tab = BottomTab::Console;
                     }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        match self.tab {
-                            BottomTab::Asm => {
-                                if ui.button(s("bottom.copy")).clicked() {
-                                    ui.ctx().copy_text(self.out.asm.clone());
-                                    self.status = s("status.copied").to_string();
-                                }
-                                if ui.button(s("bottom.save_asm")).clicked() {
-                                    self.export_asm();
-                                }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| match self.tab {
+                        BottomTab::Asm => {
+                            if ui.button(s("bottom.copy")).clicked() {
+                                ui.ctx().copy_text(self.out.asm.clone());
+                                self.status = s("status.copied").to_string();
                             }
-                            BottomTab::Console => {
-                                if ui.button(s("bottom.clear")).clicked() {
-                                    self.console.clear();
-                                }
-                                if ui.button(s("bottom.copy")).clicked() {
-                                    ui.ctx().copy_text(self.console.join("\n"));
-                                    self.status = s("status.copied").to_string();
-                                }
+                            if ui.button(s("bottom.save_asm")).clicked() {
+                                self.export_asm();
                             }
-                            BottomTab::Problems => {}
                         }
+                        BottomTab::Console => {
+                            if ui.button(s("bottom.clear")).clicked() {
+                                self.console.clear();
+                            }
+                            if ui.button(s("bottom.copy")).clicked() {
+                                ui.ctx().copy_text(self.console.join("\n"));
+                                self.status = s("status.copied").to_string();
+                            }
+                        }
+                        BottomTab::Problems => {}
                     });
                 });
                 ui.separator();
@@ -1286,7 +1491,9 @@ impl WireStudio {
                             for d in &self.out.diagnostics {
                                 let (color, sev) = match d.severity {
                                     Severity::Error => (Color32::from_rgb(235, 105, 105), "error"),
-                                    Severity::Warning => (Color32::from_rgb(230, 180, 80), "warning"),
+                                    Severity::Warning => {
+                                        (Color32::from_rgb(230, 180, 80), "warning")
+                                    }
                                     Severity::Info => (Color32::from_rgb(120, 180, 230), "info"),
                                 };
                                 ui.horizontal(|ui| {
@@ -1323,10 +1530,8 @@ impl WireStudio {
                             }
                             for line in &self.console {
                                 ui.add(
-                                    egui::Label::new(
-                                        RichText::new(line).monospace().size(12.0),
-                                    )
-                                    .selectable(true),
+                                    egui::Label::new(RichText::new(line).monospace().size(12.0))
+                                        .selectable(true),
                                 );
                             }
                         }
@@ -1354,15 +1559,55 @@ impl WireStudio {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.palette_group(ui, "palette.flow", &["Entry", "Branch", "Anchor", "Return"], &filter);
+                        self.palette_group(
+                            ui,
+                            "palette.flow",
+                            &["Entry", "Branch", "Anchor", "Return"],
+                            &filter,
+                        );
                         self.palette_group(
                             ui,
                             "palette.values",
-                            &["Const", "VarGet", "VarSet", "BinOp", "Cmp", "RegGet", "RegSet"],
+                            &[
+                                "Const", "VarGet", "VarSet", "BinOp", "Cmp", "RegGet", "RegSet",
+                            ],
                             &filter,
                         );
-                        self.palette_group(ui, "palette.output", &["PrintU64", "PrintStr"], &filter);
-                        self.palette_group(ui, "palette.system", &["Call", "Syscall", "RawAsm"], &filter);
+                        self.palette_group(
+                            ui,
+                            "palette.output",
+                            &["PrintU64", "PrintStr"],
+                            &filter,
+                        );
+                        let avr = Target::parse(&self.graph.target)
+                            .map(|t| t.is_avr())
+                            .unwrap_or(false);
+                        if avr {
+                            self.palette_group(
+                                ui,
+                                "palette.mcu",
+                                &[
+                                    "McuPinMode",
+                                    "McuDigitalWrite",
+                                    "McuDigitalRead",
+                                    "McuDelayMs",
+                                    "McuDelayUs",
+                                    "McuUartInit",
+                                    "McuUartWrite",
+                                    "McuUartWriteStr",
+                                    "McuAdcRead",
+                                    "McuRegisterWrite",
+                                    "McuRegisterRead",
+                                ],
+                                &filter,
+                            );
+                        }
+                        self.palette_group(
+                            ui,
+                            "palette.system",
+                            &["Call", "Syscall", "RawAsm"],
+                            &filter,
+                        );
                         self.palette_group(ui, "palette.notes", &["Comment"], &filter);
                         let kinds: Vec<String> = self
                             .graph
@@ -1377,6 +1622,12 @@ impl WireStudio {
                     });
                 ui.separator();
                 ui.label(RichText::new(s("palette.hint")).small().weak());
+                let avr = Target::parse(&self.graph.target)
+                    .map(|t| t.is_avr())
+                    .unwrap_or(false);
+                if !avr {
+                    ui.label(RichText::new(s("palette.mcu_hint")).small().weak());
+                }
             });
     }
 
@@ -1403,7 +1654,8 @@ impl WireStudio {
     fn palette_item(&mut self, ui: &mut egui::Ui, kind: &str) {
         let title = self.node_title(kind);
         let width = ui.available_width().max(120.0);
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click_and_drag());
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click_and_drag());
         let fill = if resp.hovered() {
             Color32::from_rgb(46, 52, 68)
         } else {
@@ -1435,8 +1687,142 @@ impl WireStudio {
         self.variables_window(ctx);
         self.custom_editor_window(ctx);
         self.confirm_window(ctx);
+        self.board_window(ctx);
         self.about_window(ctx);
         self.shortcuts_window(ctx);
+    }
+
+    fn board_window(&mut self, ctx: &egui::Context) {
+        if !self.board_open {
+            return;
+        }
+        let lang = self.lang;
+        let s = |k: &str| t(lang, k);
+        let mut open = true;
+        let mut close = false;
+        let mut action: Option<Action> = None;
+        egui::Window::new(s("board.title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                let mut changed = false;
+                ui.label(RichText::new(s("board.port")).small().weak());
+                ui.horizontal(|ui| {
+                    let mut port = self.settings.avr_port.clone().unwrap_or_default();
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut port)
+                            .desired_width(210.0)
+                            .hint_text("/dev/cu.usbmodem…"),
+                    );
+                    if resp.changed() {
+                        self.settings.avr_port = if port.trim().is_empty() {
+                            None
+                        } else {
+                            Some(port.trim().to_string())
+                        };
+                        changed = true;
+                    }
+                    if !self.avr_ports.is_empty() {
+                        egui::ComboBox::from_id_salt("avr_port_pick")
+                            .selected_text(s("board.port"))
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                for p in self.avr_ports.clone() {
+                                    if ui.selectable_label(false, &p).clicked() {
+                                        self.settings.avr_port = Some(p);
+                                        changed = true;
+                                    }
+                                }
+                            });
+                    }
+                    if ui.button(s("board.refresh")).clicked() {
+                        self.avr_ports = toolchain::avr_ports();
+                        if self.settings.avr_port.is_none() {
+                            self.settings.avr_port = self.avr_ports.first().cloned();
+                        }
+                        changed = true;
+                    }
+                });
+                if self.avr_ports.is_empty() {
+                    ui.label(RichText::new(s("board.no_ports")).small().weak());
+                }
+
+                ui.add_space(6.0);
+                ui.label(RichText::new(s("board.device")).small().weak());
+                let mut board = self
+                    .settings
+                    .avr_board
+                    .clone()
+                    .unwrap_or_else(|| "uno".to_string());
+                egui::ComboBox::from_id_salt("avr_board_pick")
+                    .selected_text(if board.eq_ignore_ascii_case("nano") {
+                        s("board.nano")
+                    } else {
+                        s("board.uno")
+                    })
+                    .width(210.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(board.eq_ignore_ascii_case("uno"), s("board.uno"))
+                            .clicked()
+                        {
+                            board = "uno".to_string();
+                            changed = true;
+                        }
+                        if ui
+                            .selectable_label(board.eq_ignore_ascii_case("nano"), s("board.nano"))
+                            .clicked()
+                        {
+                            board = "nano".to_string();
+                            changed = true;
+                        }
+                    });
+                self.settings.avr_board = Some(board);
+
+                ui.add_space(6.0);
+                ui.label(RichText::new(s("board.folder")).small().weak());
+                ui.label(RichText::new(self.firmware_dir().display().to_string()).monospace());
+                let mut folder = self.settings.out_dir.clone().unwrap_or_default();
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut folder)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(s("board.folder_default")),
+                );
+                if resp.changed() {
+                    self.settings.out_dir = if folder.trim().is_empty() {
+                        None
+                    } else {
+                        Some(folder.trim().to_string())
+                    };
+                    changed = true;
+                }
+
+                ui.add_space(8.0);
+                ui.label(RichText::new(s("board.hint")).small().weak());
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(s("toolbar.build_fw")).clicked() {
+                        action = Some(Action::BuildFirmware);
+                    }
+                    if ui.button(s("toolbar.flash")).clicked() {
+                        action = Some(Action::FlashFirmware);
+                    }
+                    if ui.button(s("board.close")).clicked() {
+                        close = true;
+                    }
+                });
+                if changed {
+                    self.settings.save();
+                }
+            });
+        if close || !open {
+            self.board_open = false;
+        }
+        if let Some(action) = action {
+            self.act(action, ctx);
+        }
     }
 
     fn confirm_window(&mut self, ctx: &egui::Context) {
@@ -1528,7 +1914,9 @@ impl WireStudio {
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.add(egui::Label::new(RichText::new(s("shortcuts.text")).monospace()));
+                ui.add(egui::Label::new(
+                    RichText::new(s("shortcuts.text")).monospace(),
+                ));
                 ui.add_space(8.0);
                 if ui.button(s("about.close")).clicked() {
                     close = true;
@@ -1614,6 +2002,17 @@ pub fn node_key(kind: &str) -> Option<&'static str> {
         "RawAsm" => "node.RawAsm",
         "Anchor" => "node.Anchor",
         "Comment" => "node.Comment",
+        "McuPinMode" => "node.McuPinMode",
+        "McuDigitalWrite" => "node.McuDigitalWrite",
+        "McuDigitalRead" => "node.McuDigitalRead",
+        "McuDelayMs" => "node.McuDelayMs",
+        "McuDelayUs" => "node.McuDelayUs",
+        "McuUartInit" => "node.McuUartInit",
+        "McuUartWrite" => "node.McuUartWrite",
+        "McuUartWriteStr" => "node.McuUartWriteStr",
+        "McuAdcRead" => "node.McuAdcRead",
+        "McuRegisterWrite" => "node.McuRegisterWrite",
+        "McuRegisterRead" => "node.McuRegisterRead",
         _ => return None,
     })
 }

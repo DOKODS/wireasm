@@ -7,6 +7,7 @@ pub enum Target {
     Aarch64Linux,
     X86_64Linux,
     X86_64Macos,
+    AvrAtmega328p,
 }
 
 impl Target {
@@ -16,6 +17,9 @@ impl Target {
             "aarch64-linux" | "arm64-linux" => Some(Target::Aarch64Linux),
             "x86_64-linux" | "x86-64-linux" | "amd64-linux" => Some(Target::X86_64Linux),
             "x86_64-macos" | "x86-64-macos" | "amd64-macos" => Some(Target::X86_64Macos),
+            "avr-atmega328p" | "avr" | "atmega328p" | "arduino-uno" | "arduino-nano" => {
+                Some(Target::AvrAtmega328p)
+            }
             _ => None,
         }
     }
@@ -26,6 +30,7 @@ impl Target {
             Target::Aarch64Linux => "aarch64-linux",
             Target::X86_64Linux => "x86_64-linux",
             Target::X86_64Macos => "x86_64-macos",
+            Target::AvrAtmega328p => "avr-atmega328p",
         }
     }
 
@@ -37,25 +42,39 @@ impl Target {
         matches!(self, Target::Aarch64Macos | Target::X86_64Macos)
     }
 
+    /// AVR microcontrollers (Arduino Uno/Nano, ATmega328P).
+    pub fn is_avr(self) -> bool {
+        matches!(self, Target::AvrAtmega328p)
+    }
+
+    /// True for microcontroller targets: bare metal, no host operating system.
+    pub fn is_mcu(self) -> bool {
+        self.is_avr()
+    }
+
+    /// Linux-style `_start` programs. macOS uses `_main`, AVR uses `main`.
     pub fn is_start(self) -> bool {
-        !self.is_macos()
+        matches!(self, Target::Aarch64Linux | Target::X86_64Linux)
     }
 
     /// Symbol name of the program entry point in the generated assembler.
     pub fn entry_symbol(self) -> &'static str {
-        if self.is_macos() {
+        if self.is_avr() {
+            "main"
+        } else if self.is_macos() {
             "_main"
         } else {
             "_start"
         }
     }
 
-    pub fn all() -> [Target; 4] {
+    pub fn all() -> [Target; 5] {
         [
             Target::Aarch64Macos,
             Target::Aarch64Linux,
             Target::X86_64Linux,
             Target::X86_64Macos,
+            Target::AvrAtmega328p,
         ]
     }
 }
@@ -357,10 +376,7 @@ impl Library {
             ("format".into(), Json::Str("wireasm-library".into())),
             ("version".into(), Json::Str(self.version.clone())),
             ("name".into(), Json::Str(self.name.clone())),
-            (
-                "description".into(),
-                Json::Str(self.description.clone()),
-            ),
+            ("description".into(), Json::Str(self.description.clone())),
             (
                 "nodes".into(),
                 Json::Arr(self.nodes.iter().map(|n| n.to_json_value()).collect()),
@@ -455,6 +471,30 @@ pub fn pins_for(kind: &str) -> Option<(Vec<PinDef>, Vec<PinDef>)> {
             inputs = vec![];
             outputs = vec![];
         }
+        "McuPinMode" => {
+            inputs = vec![p("exec", TY_EXEC)];
+            outputs = vec![p("exec", TY_EXEC)];
+        }
+        "McuDigitalWrite" => {
+            inputs = vec![p("exec", TY_EXEC), p("value", TY_U64)];
+            outputs = vec![p("exec", TY_EXEC)];
+        }
+        "McuDigitalRead" => {
+            inputs = vec![p("exec", TY_EXEC)];
+            outputs = vec![p("exec", TY_EXEC), p("value", TY_U64)];
+        }
+        "McuDelayMs" | "McuDelayUs" | "McuUartWrite" | "McuRegisterWrite" => {
+            inputs = vec![p("exec", TY_EXEC), p("value", TY_U64)];
+            outputs = vec![p("exec", TY_EXEC)];
+        }
+        "McuUartInit" | "McuUartWriteStr" => {
+            inputs = vec![p("exec", TY_EXEC)];
+            outputs = vec![p("exec", TY_EXEC)];
+        }
+        "McuAdcRead" | "McuRegisterRead" => {
+            inputs = vec![p("exec", TY_EXEC)];
+            outputs = vec![p("exec", TY_EXEC), p("value", TY_U64)];
+        }
         _ => return None,
     }
     Some((inputs, outputs))
@@ -478,6 +518,17 @@ pub const BUILTIN_KINDS: &[&str] = &[
     "RegGet",
     "RegSet",
     "RawAsm",
+    "McuPinMode",
+    "McuDigitalWrite",
+    "McuDigitalRead",
+    "McuDelayMs",
+    "McuDelayUs",
+    "McuUartInit",
+    "McuUartWrite",
+    "McuUartWriteStr",
+    "McuAdcRead",
+    "McuRegisterWrite",
+    "McuRegisterRead",
     "Comment",
 ];
 
@@ -540,7 +591,11 @@ impl Graph {
     }
 
     /// All edges leaving an output pin.
-    pub fn outgoing<'a>(&'a self, node_id: &'a str, pin: &'a str) -> impl Iterator<Item = &'a Edge> {
+    pub fn outgoing<'a>(
+        &'a self,
+        node_id: &'a str,
+        pin: &'a str,
+    ) -> impl Iterator<Item = &'a Edge> {
         self.edges
             .iter()
             .filter(move |e| e.from_node == node_id && e.from_pin == pin)
@@ -582,11 +637,7 @@ impl Graph {
     pub fn merge_library(&mut self, lib: &Library) -> usize {
         let mut changed = 0;
         for def in &lib.nodes {
-            if let Some(slot) = self
-                .custom_nodes
-                .iter_mut()
-                .find(|d| d.kind == def.kind)
-            {
+            if let Some(slot) = self.custom_nodes.iter_mut().find(|d| d.kind == def.kind) {
                 *slot = def.clone();
                 changed += 1;
             } else {
@@ -691,14 +742,8 @@ impl Graph {
 
         if let Some(Json::Arr(edges)) = v.get("edges") {
             for item in edges {
-                let from_node = item
-                    .get("fromNode")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
-                let from_pin = item
-                    .get("fromPin")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
+                let from_node = item.get("fromNode").and_then(|x| x.as_str()).unwrap_or("");
+                let from_pin = item.get("fromPin").and_then(|x| x.as_str()).unwrap_or("");
                 let to_node = item.get("toNode").and_then(|x| x.as_str()).unwrap_or("");
                 let to_pin = item.get("toPin").and_then(|x| x.as_str()).unwrap_or("");
                 if from_node.is_empty() || to_node.is_empty() {
@@ -808,6 +853,17 @@ pub fn node_title(kind: &str) -> &'static str {
         "RawAsm" => "Raw Assembly",
         "Anchor" => "Anchor",
         "Comment" => "Comment",
+        "McuPinMode" => "Pin Mode",
+        "McuDigitalWrite" => "Digital Write",
+        "McuDigitalRead" => "Digital Read",
+        "McuDelayMs" => "Delay ms",
+        "McuDelayUs" => "Delay µs",
+        "McuUartInit" => "UART Init",
+        "McuUartWrite" => "UART Write Byte",
+        "McuUartWriteStr" => "UART Write Text",
+        "McuAdcRead" => "ADC Read",
+        "McuRegisterWrite" => "Write Register",
+        "McuRegisterRead" => "Read Register",
         _ => "Unknown",
     }
 }

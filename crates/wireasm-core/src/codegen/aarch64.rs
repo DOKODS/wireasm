@@ -2,11 +2,7 @@ use super::*;
 use crate::model::*;
 use crate::validate::Diagnostic;
 
-pub fn generate(
-    g: &Graph,
-    t: Target,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<String, String> {
+pub fn generate(g: &Graph, t: Target, diags: &mut Vec<Diagnostic>) -> Result<String, String> {
     let mut cg = Cg {
         g,
         t,
@@ -50,8 +46,7 @@ impl<'a> Cg<'a> {
         self.em.ins("stp x29, x30, [sp, #-16]!");
         self.em.ins("mov x29, sp");
         if self.layout.frame <= 4095 {
-            self.em
-                .ins(format!("sub sp, sp, #{}", self.layout.frame));
+            self.em.ins(format!("sub sp, sp, #{}", self.layout.frame));
         } else {
             let frame = self.layout.frame as u64;
             self.mov_imm("x9", frame);
@@ -173,7 +168,8 @@ impl<'a> Cg<'a> {
                     self.eval_arg(&node, i)?;
                 }
                 for i in 0..4 {
-                    self.em.ins(format!("ldr x{i}, {}", a_mem(self.layout.arg(i))));
+                    self.em
+                        .ins(format!("ldr x{i}, {}", a_mem(self.layout.arg(i))));
                 }
                 let sym = c_symbol(node.prop("func").trim(), self.t);
                 self.em.ins(format!("bl {sym}"));
@@ -185,7 +181,8 @@ impl<'a> Cg<'a> {
                     self.eval_arg(&node, i)?;
                 }
                 for i in 0..4 {
-                    self.em.ins(format!("ldr x{i}, {}", a_mem(self.layout.arg(i))));
+                    self.em
+                        .ins(format!("ldr x{i}, {}", a_mem(self.layout.arg(i))));
                 }
                 self.mov_imm("x9", node.prop_u64("number"));
                 if self.t.is_macos() {
@@ -397,9 +394,10 @@ impl<'a> Cg<'a> {
             other if self.g.custom(other).is_some() => {
                 let def = self.g.custom(other).cloned().unwrap_or_default();
                 if def.has_exec_input() {
-                    let off = self.layout.custom_slot(&node.id).ok_or_else(|| {
-                        format!("custom node {} has no u64 output", node.id)
-                    })?;
+                    let off = self
+                        .layout
+                        .custom_slot(&node.id)
+                        .ok_or_else(|| format!("custom node {} has no u64 output", node.id))?;
                     self.em.ins(format!("ldr x0, {}", a_mem(off)));
                 } else {
                     let inputs = def.u64_inputs();
@@ -422,12 +420,10 @@ impl<'a> Cg<'a> {
                             a_mem(self.layout.custom_temp(depth, i))
                         ));
                     }
-                    let regs: Vec<String> =
-                        (0..inputs.len()).map(|i| format!("x{i}")).collect();
+                    let regs: Vec<String> = (0..inputs.len()).map(|i| format!("x{i}")).collect();
                     let seq = self.next_inline();
                     let label = format!("Lcustom_{}_{seq}", sanitize(&node.id));
-                    let text =
-                        expand_custom_template(&def.asm_aarch64, &node, &regs, "x0", &label);
+                    let text = expand_custom_template(&def.asm_aarch64, &node, &regs, "x0", &label);
                     self.em.comment("custom node begin");
                     emit_snippet(&mut self.em, &text);
                     self.em.comment("custom node end");
@@ -485,7 +481,8 @@ impl<'a> Cg<'a> {
     fn emit_runtime(&mut self) {
         if uses_print_u64(self.g) {
             self.em.blank();
-            self.em.comment("runtime: print unsigned 64-bit decimal in x0");
+            self.em
+                .comment("runtime: print unsigned 64-bit decimal in x0");
             self.em.label("print_u64");
             self.em.ins("sub sp, sp, #80");
             self.em.ins("add x1, sp, #79");
@@ -499,7 +496,8 @@ impl<'a> Cg<'a> {
             self.em.ins("add x2, x2, #1");
             self.em.ins("mov x0, x4");
             self.em.ins("cbnz x0, .Lpu_loop");
-            self.em.comment("append newline (byte just past the highest digit)");
+            self.em
+                .comment("append newline (byte just past the highest digit)");
             self.em.ins("mov w5, #10");
             self.em.ins("strb w5, [sp, #79]");
             self.em.ins("add x2, x2, #1");
