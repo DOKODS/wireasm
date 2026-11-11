@@ -318,3 +318,13 @@ AVR (Arduino Uno/Nano), STM32 — следующим этапом.
 - Повторная проверка AVR: `avr_blink` — text 222, bss 132 (в прошлой записи
   было 218 — это до замены `tst` на `or`); `avr_uart_hello` — text 224,
   data 26, bss 132.
+
+Публикация:
+
+- Коммит `8674934`, тег `v0.2.0`, релиз
+  https://github.com/DOKODS/wireasm/releases/tag/v0.2.0.
+- CI на `main`: success. Release на `v0.2.0`: success, четыре архива —
+  `aarch64-macos` (3.0 МБ), `x86_64-macos` (3.4 МБ), `x86_64-linux` (4.3 МБ),
+  `x86_64-windows` (3.7 МБ).
+- Скачанный из релиза `aarch64-macos`: `wireasm --help` печатает 0.2.0,
+  `examples/hello.json --run` — `Hello from WireASM!`, код 0.
