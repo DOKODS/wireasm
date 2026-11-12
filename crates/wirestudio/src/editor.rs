@@ -218,6 +218,9 @@ impl CodeEditor {
 
 // ---------------------------------------------------------------- highlighting
 
+/// The size of the code font, in points.
+const CODE_FONT_SIZE: f32 = 14.0;
+
 const DEFAULT: Color32 = Color32::from_rgb(212, 212, 212);
 const COMMENT: Color32 = Color32::from_rgb(106, 153, 85);
 const STRING: Color32 = Color32::from_rgb(206, 145, 120);
@@ -341,7 +344,7 @@ pub fn highlight(
     wrap_width: f32,
     syntax: Syntax,
 ) -> std::sync::Arc<egui::Galley> {
-    let font = FontId::monospace(14.0);
+    let font = FontId::monospace(CODE_FONT_SIZE);
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let src = text.as_str();
@@ -921,41 +924,56 @@ impl WireStudio {
             .map(|t| t.text.clone())
             .unwrap_or_default();
         let lines = text.lines().count().max(1);
-        let gutter_width = (lines.to_string().len() as f32 * 8.0 + 14.0).max(38.0);
+
+        // The editor fills the window. A fixed width left a gap on a wide
+        // screen and pushed the text out of view on Windows.
+        let font = egui::FontId::monospace(CODE_FONT_SIZE);
+        let (row_height, char_width) =
+            ui.fonts_mut(|f| (f.row_height(&font), f.glyph_width(&font, '0')));
+        let digits = lines.to_string().len() as f32;
+        let gutter_width = if line_numbers {
+            (digits * char_width + char_width * 2.0).max(char_width * 3.0)
+        } else {
+            0.0
+        };
+        let visible_rows = ((ui.available_height() / row_height).ceil() as usize).max(1);
 
         let mut changed = false;
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    if line_numbers {
-                        let numbers: String = (1..=lines).map(|n| format!("{n}\n")).collect();
-                        ui.add_sized(
-                            [gutter_width, 0.0],
-                            egui::Label::new(
-                                RichText::new(numbers)
-                                    .monospace()
-                                    .color(Color32::from_gray(120)),
-                            )
-                            .selectable(false),
-                        );
-                    }
-                    let mut layouter =
-                        |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                            highlight(ui, buf, wrap_width, syntax)
-                        };
-                    let resp = ui.add(
-                        egui::TextEdit::multiline(&mut text)
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
-                            .desired_width(1200.0)
-                            .desired_rows(lines)
-                            .lock_focus(true)
-                            .layouter(&mut layouter),
+        ui.horizontal_top(|ui| {
+            if line_numbers {
+                // The numbers live in the same scroll area as the text, so
+                // they stay aligned while both scroll.
+                let numbers: String = (1..=lines).map(|n| format!("{n}\n")).collect();
+                ui.allocate_ui(egui::vec2(gutter_width, f32::INFINITY), |gutter| {
+                    gutter.add_sized(
+                        [gutter_width, 0.0],
+                        egui::Label::new(
+                            RichText::new(numbers)
+                                .monospace()
+                                .color(Color32::from_gray(120)),
+                        )
+                        .selectable(false),
                     );
-                    changed = resp.changed();
                 });
-            });
+            }
+            let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                highlight(ui, buf, f32::INFINITY, syntax)
+            };
+            let resp = ui.add_sized(
+                [
+                    ui.available_width(),
+                    (visible_rows as f32 * row_height).max(row_height),
+                ],
+                egui::TextEdit::multiline(&mut text)
+                    .font(egui::TextStyle::Monospace)
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(visible_rows)
+                    .lock_focus(true)
+                    .layouter(&mut layouter),
+            );
+            changed = resp.changed();
+        });
         if changed {
             if let Some(tab) = self.editor.active_mut() {
                 tab.text = text;

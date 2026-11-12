@@ -381,6 +381,7 @@ impl<'a> Simulator<'a> {
                             self.stamp_norton_c(&mut a, out, 1.0 / g.r);
                         }
                     }
+                    ComponentKind::Instrument(_) => {}
                     ComponentKind::Logic(l) => {
                         for out in &c.pins[l.n_in..] {
                             self.stamp_norton_c(&mut a, out, 1.0 / l.r);
@@ -417,6 +418,23 @@ impl<'a> Simulator<'a> {
         self.circuit.probes.iter().map(|p| p.name.clone()).collect()
     }
 
+    /// The nodes an instrument watches, with the name of the instrument.
+    ///
+    /// The measurements of an instrument are recorded under the name of the
+    /// instrument and the channel, so a scope shows the nodes it is wired to.
+    pub fn instrument_channels(&self) -> Vec<(String, usize, String)> {
+        let mut out = Vec::new();
+        for c in &self.circuit.components {
+            let ComponentKind::Instrument(inst) = &c.kind else {
+                continue;
+            };
+            for (index, node) in inst.channels.iter().enumerate() {
+                out.push((c.id.clone(), index, node.clone()));
+            }
+        }
+        out
+    }
+
     fn probe_node(&self, name: &str) -> String {
         self.circuit
             .probes
@@ -438,6 +456,17 @@ impl<'a> Simulator<'a> {
             if let Some(s) = trace.series.get_mut(&name) {
                 s.push(v);
             }
+        }
+        // The instruments record what they see on their own channels.
+        for (id, index, node) in self.instrument_channels() {
+            let v = sol.node(&node);
+            trace
+                .instruments
+                .entry(id)
+                .or_default()
+                .entry(index)
+                .or_default()
+                .push(v);
         }
     }
 
@@ -526,7 +555,10 @@ impl<'a> Simulator<'a> {
                 ComponentKind::Diode(_) | ComponentKind::Led(_) => {
                     self.stamp_g(&mut a, &c.pins[0], &c.pins[1], self.opts.gmin);
                 }
-                ComponentKind::Ground | ComponentKind::Logic(_) | ComponentKind::Seq(_) => {}
+                ComponentKind::Ground
+                | ComponentKind::Logic(_)
+                | ComponentKind::Seq(_)
+                | ComponentKind::Instrument(_) => {}
             }
         }
         let x = a.solve(b)?;
@@ -718,6 +750,7 @@ impl<'a> Simulator<'a> {
                     }
                 }
                 ComponentKind::Diode(_) | ComponentKind::Led(_) | ComponentKind::Ground => {}
+                ComponentKind::Instrument(_) => {}
             }
         }
     }

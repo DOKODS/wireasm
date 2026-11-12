@@ -8,6 +8,7 @@
 //! pin numbers and the logic stay in step.
 
 use crate::library::{Entry, Family, Func, Library, Power, Unit};
+use crate::netlist::InstrumentKind;
 
 /// Build an entry from a list of units and a DIP pin map.
 fn part(
@@ -1065,6 +1066,81 @@ pub fn ecl() -> Vec<Entry> {
     out
 }
 
+/// The virtual instruments, the way Multisim puts them on the toolbar.
+pub fn instruments() -> Vec<Entry> {
+    let mut out = Vec::new();
+    for kind in [
+        InstrumentKind::Scope,
+        InstrumentKind::Multimeter,
+        InstrumentKind::FunctionGenerator,
+        InstrumentKind::BodePlotter,
+        InstrumentKind::LogicAnalyzer,
+        InstrumentKind::Wattmeter,
+        InstrumentKind::FrequencyCounter,
+    ] {
+        let channels = kind.channel_count();
+        // The pins carry the channel names, the way Multisim labels them.
+        let mut pins: Vec<String> = Vec::new();
+        for i in 0..channels {
+            pins.push(channel_label(kind, i));
+        }
+        let dip: Vec<(u8, String)> = pins
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (i as u8 + 1, name.clone()))
+            .collect();
+        let mut entry = part(
+            kind.key(),
+            instrument_title(kind),
+            Family::Instrument,
+            kind.prefix(),
+            vec![],
+            vec![],
+            Power::default(),
+        );
+        entry.dip = dip;
+        out.push(entry);
+    }
+    out
+}
+
+/// The name of one channel of an instrument.
+pub fn channel_label(kind: InstrumentKind, index: usize) -> String {
+    match kind {
+        InstrumentKind::Scope => match index {
+            0 => "A".to_string(),
+            1 => "B".to_string(),
+            2 => "C".to_string(),
+            _ => "D".to_string(),
+        },
+        InstrumentKind::Multimeter => "+".to_string(),
+        InstrumentKind::FunctionGenerator => "OUT".to_string(),
+        InstrumentKind::BodePlotter => match index {
+            0 => "IN".to_string(),
+            _ => "OUT".to_string(),
+        },
+        InstrumentKind::LogicAnalyzer => format!("{index}"),
+        InstrumentKind::Wattmeter => match index {
+            0 => "V".to_string(),
+            _ => "I".to_string(),
+        },
+        InstrumentKind::FrequencyCounter => "IN".to_string(),
+    }
+}
+
+/// The title of an instrument in the palette.
+pub fn instrument_title(kind: InstrumentKind) -> &'static str {
+    match kind {
+        InstrumentKind::Scope => "Oscilloscope",
+        InstrumentKind::Multimeter => "Multimeter",
+        InstrumentKind::FunctionGenerator => "Function generator",
+        InstrumentKind::BodePlotter => "Bode plotter",
+        InstrumentKind::LogicAnalyzer => "Logic analyzer",
+        InstrumentKind::Wattmeter => "Wattmeter",
+        InstrumentKind::FrequencyCounter => "Frequency counter",
+    }
+}
+
 /// The catalogue as one library.
 pub fn all() -> Library {
     let mut lib = Library::new("WireASM elements");
@@ -1075,5 +1151,6 @@ pub fn all() -> Library {
     lib.entries.extend(ttl_shottky());
     lib.entries.extend(cmos());
     lib.entries.extend(ecl());
+    lib.entries.extend(instruments());
     lib
 }

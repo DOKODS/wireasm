@@ -12,6 +12,9 @@ use crate::linalg::C;
 pub struct Trace {
     pub time: Vec<f64>,
     pub series: BTreeMap<String, Vec<f64>>,
+    /// What the instruments measured: the id of the instrument, the channel
+    /// and the values.
+    pub instruments: BTreeMap<String, BTreeMap<usize, Vec<f64>>>,
 }
 
 impl Trace {

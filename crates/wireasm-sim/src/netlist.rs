@@ -367,6 +367,89 @@ pub enum ComponentKind {
     /// A pin driven by the virtual MCU. The output voltage is set by the
     /// simulator, not by the netlist.
     McuPin,
+    /// A measuring instrument: it watches nodes and reports what it sees.
+    Instrument(Instrument),
+}
+
+/// A virtual instrument, the way Multisim puts them on the schematic.
+#[derive(Clone, Debug)]
+pub struct Instrument {
+    /// Which instrument it is.
+    pub kind: InstrumentKind,
+    /// The channels it measures, one node per channel.
+    pub channels: Vec<String>,
+}
+
+/// The instruments of the Multisim toolbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstrumentKind {
+    /// Oscilloscope.
+    Scope,
+    /// Multimeter.
+    Multimeter,
+    /// Function generator.
+    FunctionGenerator,
+    /// Bode plotter.
+    BodePlotter,
+    /// Logic analyzer.
+    LogicAnalyzer,
+    /// Wattmeter.
+    Wattmeter,
+    /// Frequency counter.
+    FrequencyCounter,
+}
+
+impl InstrumentKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            InstrumentKind::Scope => "scope",
+            InstrumentKind::Multimeter => "multimeter",
+            InstrumentKind::FunctionGenerator => "function_generator",
+            InstrumentKind::BodePlotter => "bode_plotter",
+            InstrumentKind::LogicAnalyzer => "logic_analyzer",
+            InstrumentKind::Wattmeter => "wattmeter",
+            InstrumentKind::FrequencyCounter => "frequency_counter",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<InstrumentKind> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "scope" | "oscilloscope" => Some(InstrumentKind::Scope),
+            "multimeter" => Some(InstrumentKind::Multimeter),
+            "function_generator" | "funcgen" => Some(InstrumentKind::FunctionGenerator),
+            "bode_plotter" | "bode" => Some(InstrumentKind::BodePlotter),
+            "logic_analyzer" | "logic" => Some(InstrumentKind::LogicAnalyzer),
+            "wattmeter" => Some(InstrumentKind::Wattmeter),
+            "frequency_counter" | "freqcounter" => Some(InstrumentKind::FrequencyCounter),
+            _ => None,
+        }
+    }
+
+    /// The reference name Multisim gives the instrument, e.g. `XSC1`.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            InstrumentKind::Scope => "XSC",
+            InstrumentKind::Multimeter => "XMM",
+            InstrumentKind::FunctionGenerator => "XFG",
+            InstrumentKind::BodePlotter => "XBP",
+            InstrumentKind::LogicAnalyzer => "XLA",
+            InstrumentKind::Wattmeter => "XWM",
+            InstrumentKind::FrequencyCounter => "XFC",
+        }
+    }
+
+    /// How many channels the instrument has.
+    pub fn channel_count(self) -> usize {
+        match self {
+            InstrumentKind::Scope => 4,
+            InstrumentKind::Multimeter => 1,
+            InstrumentKind::FunctionGenerator => 1,
+            InstrumentKind::BodePlotter => 2,
+            InstrumentKind::LogicAnalyzer => 16,
+            InstrumentKind::Wattmeter => 2,
+            InstrumentKind::FrequencyCounter => 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -483,6 +566,11 @@ impl Circuit {
                 ComponentKind::McuPin => {
                     if c.pins.len() != 1 {
                         return Err(format!("mcu pin `{}` needs one node", c.id));
+                    }
+                }
+                ComponentKind::Instrument(inst) => {
+                    if inst.channels.is_empty() {
+                        return Err(format!("instrument `{}` has no channels", c.id));
                     }
                 }
                 ComponentKind::Logic(l) => {
@@ -630,6 +718,10 @@ impl Circuit {
                 }
                 ComponentKind::McuPin => {
                     m.insert("kind".into(), Json::Str("mcu_pin".into()));
+                }
+                ComponentKind::Instrument(inst) => {
+                    m.insert("kind".into(), Json::Str("instrument".into()));
+                    m.insert("instrument".into(), Json::Str(inst.kind.key().into()));
                 }
                 ComponentKind::Logic(l) => {
                     m.insert("kind".into(), Json::Str("ic_logic".into()));
@@ -828,6 +920,17 @@ fn parse_component(v: &Json) -> Result<Component, String> {
             })
         }
         "mcu_pin" | "pin" | "mcupin" => ComponentKind::McuPin,
+        "instrument" => {
+            let kind = v
+                .get("instrument")
+                .and_then(|x| x.as_str())
+                .and_then(InstrumentKind::from_key)
+                .ok_or_else(|| format!("component `{id}` has an unknown instrument"))?;
+            ComponentKind::Instrument(Instrument {
+                kind,
+                channels: Vec::new(),
+            })
+        }
         "ic_logic" | "catalogue_logic" => {
             let func = v
                 .get("func")

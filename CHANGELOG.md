@@ -3,6 +3,35 @@
 All notable changes to WireASM and WireStudio are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] — 2026-11-12
+
+### Added
+
+- The schematic editor follows Multisim now: a light sheet with a dotted
+  grid, red wires with right-angle bends, black component bodies with blue
+  designators and values, node numbers on the nets and dots at the
+  junctions.
+- Virtual instruments stand on the sheet as components and open a front
+  panel: XSC1 oscilloscope (four channels), XMM1 multimeter, XFG1 function
+  generator, XBP1 Bode plotter, XLA1 logic analyzer, XWM1 wattmeter and XFC1
+  frequency counter. A run opens the panels of the instruments it measured.
+- An example schematic with an oscilloscope: `circuit_scope_demo`.
+
+### Fixed
+
+- The code editor fills the window instead of stopping at 1200 pixels, uses
+  the real font metrics for the gutter and no longer wraps lines, so a
+  maximised window on Windows shows the whole file with aligned numbers.
+- A source file given on the command line opens in the code editor instead
+  of being parsed as a graph.
+- The caption of a component no longer overlaps the caption of its
+  neighbour.
+
+### Changed
+
+- The README was rewritten: the feature list reads as a list of features
+  rather than an advertisement.
+
 ## [0.4.1] — 2026-11-12
 
 ### Added

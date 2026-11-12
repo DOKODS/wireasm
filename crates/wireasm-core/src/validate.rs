@@ -683,7 +683,7 @@ fn validate_custom_nodes(g: &Graph, d: &mut Vec<Diagnostic>) {
         if u64_outputs > 1 {
             d.push(Diagnostic::error(
                 None,
-                format!("{label}: version 0.4.1 supports at most one u64 output"),
+                format!("{label}: version 0.4.2 supports at most one u64 output"),
             ));
         }
         if exec_inputs == 0 && u64_outputs == 0 {

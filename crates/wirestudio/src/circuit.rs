@@ -20,18 +20,12 @@ use wireasm_sim::{McuBinding, Simulator, Solution, Trace, VirtualMcu};
 
 use crate::app::{View, WireStudio};
 use crate::i18n::t;
+use crate::sheet;
 
-const BG: Color32 = Color32::from_rgb(16, 18, 24);
-const GRID: Color32 = Color32::from_rgb(36, 40, 52);
-const GRID_STRONG: Color32 = Color32::from_rgb(52, 58, 74);
-const WIRE: Color32 = Color32::from_rgb(104, 196, 172);
-const WIRE_SEL: Color32 = Color32::from_rgb(250, 200, 90);
 const PART_BORDER: Color32 = Color32::from_rgb(86, 94, 116);
-const PIN: Color32 = Color32::from_rgb(206, 214, 228);
 const PIN_HOT: Color32 = Color32::from_rgb(250, 200, 90);
 const TEXT: Color32 = Color32::from_rgb(226, 231, 240);
 const MUTED: Color32 = Color32::from_rgb(150, 158, 176);
-const PROBE: Color32 = Color32::from_rgb(235, 130, 90);
 const ERROR: Color32 = Color32::from_rgb(235, 105, 105);
 const OK: Color32 = Color32::from_rgb(120, 200, 140);
 
@@ -132,6 +126,11 @@ pub struct CircuitDoc {
     pub library: wireasm_sim::Library,
     /// The search text of the palette.
     pub filter: String,
+    /// The instruments whose front panel is open.
+    pub open_instruments: Vec<usize>,
+    /// The last part that was clicked and the time of the click: a second
+    /// click opens the panel of an instrument.
+    pub last_click: (usize, u64),
     pub view: View,
     pub selected: Option<Sel>,
     pub pending: Option<PinAddr>,
@@ -154,6 +153,8 @@ impl Default for CircuitDoc {
             model: Schematic::divider(),
             library: wireasm_sim::builtin(),
             filter: String::new(),
+            open_instruments: Vec::new(),
+            last_click: (usize::MAX, 0),
             view: View::default(),
             selected: None,
             pending: None,
@@ -236,6 +237,31 @@ impl WireStudio {
                             }
                         }
                     }
+                    // The instruments have their own group, like the
+                    // instrument toolbar of Multisim.
+                    let instruments: Vec<_> = self
+                        .circuit
+                        .library
+                        .entries
+                        .iter()
+                        .filter(|e| e.family == wireasm_sim::Family::Instrument)
+                        .filter(|e| {
+                            filter.is_empty()
+                                || e.key.to_ascii_lowercase().contains(&filter)
+                                || e.title.to_ascii_lowercase().contains(&filter)
+                        })
+                        .cloned()
+                        .collect();
+                    if !instruments.is_empty() {
+                        ui.separator();
+                        ui.label(RichText::new(s("lib.instrument")).strong());
+                        for entry in instruments {
+                            let label = format!("{}  {}", entry.prefix, entry.title);
+                            if ui.selectable_label(false, label).clicked() {
+                                self.add_instrument(&entry);
+                            }
+                        }
+                    }
                     ui.separator();
                     if ui.button(s("circuit.fit")).clicked() {
                         self.circuit.fit_requested = true;
@@ -278,6 +304,128 @@ impl WireStudio {
         self.circuit.selected = Some(Sel::Part(idx));
         self.circuit.dirty = true;
         self.status = self.tr("status.circuit_added").to_string();
+    }
+
+    /// Place an instrument on the sheet, the way Multisim drops one from its
+    /// instrument toolbar.
+    fn add_instrument(&mut self, entry: &wireasm_sim::Entry) {
+        let kind = match wireasm_sim::netlist::InstrumentKind::from_key(&entry.key) {
+            Some(k) => k,
+            None => return,
+        };
+        let center = self.circuit_center();
+        let mut part = wireasm_sim::schematic::Part::new(
+            self.next_catalog_id(entry.prefix.as_str()),
+            PartKind::Gate,
+            center.x,
+            center.y,
+        );
+        part.catalog = Some(entry.key.clone());
+        part.instrument = Some(kind);
+        self.circuit.model.parts.push(part);
+        let idx = self.circuit.model.parts.len() - 1;
+        self.circuit.selected = Some(Sel::Part(idx));
+        self.circuit.dirty = true;
+        self.status = self.tr("status.circuit_added").to_string();
+    }
+
+    /// Open the front panel of every instrument that was opened.
+    pub fn instrument_windows(&mut self, ctx: &egui::Context) {
+        let opened = self.circuit.open_instruments.clone();
+        for index in opened {
+            let Some(part) = self.circuit.model.parts.get(index) else {
+                continue;
+            };
+            let part = part.clone();
+            let Some(kind) = part.instrument else {
+                continue;
+            };
+            let title = format!(
+                "{} — {}",
+                part.id,
+                wireasm_sim::library_data::instrument_title(kind)
+            );
+            egui::Window::new(title)
+                .collapsible(true)
+                .resizable(true)
+                .default_size([420.0, 300.0])
+                .show(ctx, |ui| {
+                    let channels = self.instrument_channels(index);
+                    let (rect, _) =
+                        ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                    let reading = self.instrument_reading(&channels);
+                    crate::instruments::display(ui, rect, &part.id, &channels, &reading, kind);
+                });
+        }
+    }
+
+    /// The nets an instrument watches and what it measured.
+    fn instrument_channels(&self, index: usize) -> crate::instruments::Channels {
+        let nets = self.circuit.model.nets();
+        let Some(part) = self.circuit.model.parts.get(index) else {
+            return crate::instruments::Channels::default();
+        };
+        let mut out = Vec::new();
+        for name in part.pins() {
+            if let Some(net) = nets.get(&(index, name.clone())) {
+                out.push(net.clone());
+            }
+        }
+        let mut channels = crate::instruments::Channels::new(out);
+        // The values come from the last run, recorded per instrument.
+        if let Some(SimResult::Tran(trace)) = &self.circuit.result {
+            if let Some(measured) = trace.instruments.get(&part.id) {
+                for index in 0..channels.nets.len() {
+                    if let Some(values) = measured.get(&index) {
+                        channels.values.push(values.clone());
+                    } else {
+                        channels.values.push(Vec::new());
+                    }
+                }
+            }
+        }
+        channels
+    }
+
+    /// What the instruments show, taken from the last simulation.
+    fn instrument_reading(
+        &self,
+        channels: &crate::instruments::Channels,
+    ) -> crate::instruments::Reading {
+        match &self.circuit.result {
+            Some(SimResult::Tran(trace)) => {
+                let mut copy = wireasm_sim::Trace {
+                    time: trace.time.clone(),
+                    ..Default::default()
+                };
+                for net in &channels.nets {
+                    if let Some(series) = trace.series.get(net) {
+                        copy.series.insert(net.clone(), series.clone());
+                    }
+                }
+                crate::instruments::Reading::Transient(copy)
+            }
+            Some(SimResult::Ac(sweep)) => {
+                let mut copy = wireasm_sim::AcSweep {
+                    frequency: sweep.frequency.clone(),
+                    ..Default::default()
+                };
+                for net in &channels.nets {
+                    if let Some(series) = sweep.series.get(net) {
+                        copy.series.insert(net.clone(), series.clone());
+                    }
+                }
+                crate::instruments::Reading::Ac(copy)
+            }
+            Some(SimResult::Dc(sol)) => {
+                let copy = wireasm_sim::Solution {
+                    nodes: sol.nodes.clone(),
+                    ..Default::default()
+                };
+                crate::instruments::Reading::Dc(copy)
+            }
+            None => crate::instruments::Reading::Empty,
+        }
     }
 
     /// The next free reference designator for a prefix.
@@ -789,6 +937,51 @@ impl WireStudio {
             }
         }
 
+        // The instruments on the sheet, and a way to open their panels.
+        let instruments: Vec<usize> = self
+            .circuit
+            .model
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.instrument.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        if !instruments.is_empty() {
+            ui.separator();
+            ui.label(RichText::new(s("lib.instrument")).strong());
+            for idx in &instruments {
+                let part = &self.circuit.model.parts[*idx];
+                let open = self.circuit.open_instruments.contains(idx);
+                ui.horizontal(|ui| {
+                    let label = format!("{} ({})", part.id, part.instrument_label());
+                    if ui
+                        .selectable_label(open, label)
+                        .on_hover_text(s("circuit.instrument_open"))
+                        .clicked()
+                    {
+                        if open {
+                            self.circuit.open_instruments.retain(|i| i != idx);
+                        } else {
+                            self.circuit.open_instruments.push(*idx);
+                        }
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                if ui.button(s("circuit.instrument_open_all")).clicked() {
+                    for idx in &instruments {
+                        if !self.circuit.open_instruments.contains(idx) {
+                            self.circuit.open_instruments.push(*idx);
+                        }
+                    }
+                    self.status = format!("open: {:?}", self.circuit.open_instruments);
+                }
+                if ui.button(s("circuit.instrument_close_all")).clicked() {
+                    self.circuit.open_instruments.clear();
+                }
+            });
+        }
         if ui.button(s("circuit.run")).clicked() {
             self.run_circuit();
         }
@@ -992,14 +1185,23 @@ impl WireStudio {
             self.circuit_fit(rect);
             self.circuit.fit_requested = false;
         }
-        painter.rect_filled(rect, 0.0, BG);
-        self.draw_circuit_grid(&painter, rect);
+        painter.rect_filled(rect, 0.0, sheet::SHEET);
+        sheet::draw_grid(
+            &painter,
+            rect,
+            self.circuit.view.zoom,
+            self.circuit.view.pan,
+        );
 
         for (i, w) in self.circuit.model.wires.iter().enumerate() {
             let a = self.circuit.model.pin_pos(w.a.part, &w.a.pin);
             let b = self.circuit.model.pin_pos(w.b.part, &w.b.pin);
             let selected = self.circuit.selected == Some(Sel::Wire(i));
-            let color = if selected { WIRE_SEL } else { WIRE };
+            let color = if selected {
+                sheet::WIRE_SEL
+            } else {
+                sheet::WIRE
+            };
             let points = elbow(a, b);
             for pair in points.windows(2) {
                 painter.line_segment(
@@ -1007,14 +1209,39 @@ impl WireStudio {
                         self.circuit.view.w2s(rect, pair[0]),
                         self.circuit.view.w2s(rect, pair[1]),
                     ],
-                    Stroke::new(2.0, color),
+                    Stroke::new(1.6, color),
                 );
             }
         }
 
+        // A dot wherever three or more wires meet, the way Multisim marks a
+        // junction.
+        for junction in self.junctions() {
+            sheet::draw_junction(
+                &painter,
+                self.circuit.view.w2s(rect, junction),
+                self.circuit.view.zoom,
+            );
+        }
+
+        // The number of every net, printed next to its wire.
+        for (number, (name, at)) in self.node_numbers().into_iter().enumerate() {
+            let _ = name;
+            sheet::draw_node_number(
+                &painter,
+                self.circuit.view.w2s(rect, at),
+                &number.to_string(),
+                self.circuit.view.zoom,
+            );
+        }
+
         for i in 0..self.circuit.model.parts.len() {
             let selected = self.circuit.selected == Some(Sel::Part(i));
-            self.draw_part(&painter, rect, i, selected);
+            if self.circuit.model.parts[i].instrument.is_some() {
+                self.draw_instrument(&painter, rect, i, selected);
+            } else {
+                self.draw_part(&painter, rect, i, selected);
+            }
         }
 
         for i in 0..self.circuit.model.parts.len() {
@@ -1028,12 +1255,12 @@ impl WireStudio {
                     .as_ref()
                     .map(|p| p.part == i && p.pin == pin)
                     .unwrap_or(false);
-                painter.circle_filled(screen, PIN_R * self.circuit.view.zoom.max(0.6), PIN);
+                painter.circle_filled(screen, PIN_R * self.circuit.view.zoom.max(0.6), sheet::PIN);
                 if hot {
                     painter.circle_stroke(
                         screen,
                         (PIN_R + 3.0) * self.circuit.view.zoom.max(0.6),
-                        Stroke::new(1.6, PIN_HOT),
+                        Stroke::new(1.6, sheet::PIN_HOT),
                     );
                 }
             }
@@ -1042,13 +1269,13 @@ impl WireStudio {
         for p in self.circuit.model.probes.clone() {
             let pos = self.circuit.model.pin_pos(p.part, &p.pin);
             let screen = self.circuit.view.w2s(rect, pos);
-            painter.circle_stroke(screen, 7.0, Stroke::new(1.6, PROBE));
+            painter.circle_stroke(screen, 7.0, Stroke::new(1.6, sheet::PROBE));
             painter.text(
                 screen + Vec2::new(9.0, -9.0),
                 egui::Align2::LEFT_BOTTOM,
                 &p.name,
                 FontId::monospace(11.0),
-                PROBE,
+                sheet::PROBE,
             );
         }
 
@@ -1085,26 +1312,6 @@ impl WireStudio {
         self.circuit.view.pan = center.to_vec2() - (rect.size() * 0.5) / zoom;
     }
 
-    fn draw_circuit_grid(&self, painter: &egui::Painter, rect: Rect) {
-        let step = 20.0 * self.circuit.view.zoom;
-        if step < 6.0 {
-            return;
-        }
-        let start_x =
-            rect.min.x - ((self.circuit.view.pan.x * self.circuit.view.zoom).rem_euclid(step));
-        let start_y =
-            rect.min.y - ((self.circuit.view.pan.y * self.circuit.view.zoom).rem_euclid(step));
-        let mut x = start_x;
-        while x < rect.right() {
-            let mut y = start_y;
-            while y < rect.bottom() {
-                painter.circle_filled(egui::pos2(x, y), 1.0, GRID);
-                y += step;
-            }
-            x += step;
-        }
-    }
-
     fn draw_part(&self, painter: &egui::Painter, rect: Rect, index: usize, selected: bool) {
         let Some(part) = self.circuit.model.parts.get(index) else {
             return;
@@ -1131,43 +1338,95 @@ impl WireStudio {
         };
         crate::symbols::draw(&ctx);
 
-        // The reference designator above the symbol.
-        let anchor = self
-            .circuit
-            .view
-            .w2s(rect, Pos2::new(part.x, part.y - PART_H * 0.5 - 4.0));
-        painter.text(
+        // Multisim prints the designator and the value beside the symbol.
+        let value = if part.is_catalog() {
+            String::new()
+        } else {
+            part.caption()
+        };
+        let half = match part.kind {
+            PartKind::Ground => 14.0,
+            PartKind::Gate => 20.0,
+            _ => PART_H * 0.5,
+        };
+        let anchor = self.circuit.view.w2s(rect, Pos2::new(part.x, part.y));
+        sheet::draw_label(
+            painter,
             anchor,
-            egui::Align2::CENTER_BOTTOM,
             &part.id,
-            FontId::monospace(11.0),
-            MUTED,
+            &value,
+            self.circuit.view.zoom,
+            half,
         );
-        // The nominal value below it, on a plate so it stays readable.
-        if !part.is_catalog() && !matches!(part.kind, PartKind::Ground) {
-            let caption = part.caption();
-            let below = matches!(
-                part.kind,
-                PartKind::Diode | PartKind::Led | PartKind::Vsource | PartKind::Isource
-            );
-            let anchor = self.circuit.view.w2s(
-                rect,
-                Pos2::new(
-                    part.x,
-                    part.y + if below { PART_H * 0.5 + 12.0 } else { 0.0 },
-                ),
-            );
-            let size = Vec2::new(caption.chars().count() as f32 * 6.6 + 8.0, 15.0);
-            let plate = Rect::from_center_size(anchor, size);
-            painter.rect_filled(plate, 3.0, Color32::from_rgb(20, 22, 30));
-            painter.text(
-                anchor,
-                egui::Align2::CENTER_CENTER,
-                caption,
-                FontId::monospace(11.0),
-                TEXT,
-            );
+    }
+
+    /// Where to print the number of every net.
+    fn node_numbers(&self) -> Vec<(String, Pos2)> {
+        let nets = self.circuit.model.nets();
+        let mut out: Vec<(String, Pos2)> = Vec::new();
+        let mut seen: BTreeMap<String, ()> = BTreeMap::new();
+        for w in &self.circuit.model.wires {
+            for pin in [&w.a, &w.b] {
+                let Some(name) = nets.get(&(pin.part, pin.pin.clone())) else {
+                    continue;
+                };
+                if name == "0" || seen.insert(name.clone(), ()).is_some() {
+                    continue;
+                }
+                let p = self.circuit.model.pin_pos(pin.part, &pin.pin);
+                out.push((name.clone(), p + Vec2::new(4.0, -6.0)));
+            }
         }
+        out
+    }
+
+    /// The points where three or more wire ends meet: a junction gets a dot.
+    fn junctions(&self) -> Vec<Pos2> {
+        let mut counts: BTreeMap<(i64, i64), usize> = BTreeMap::new();
+        let mut spots: BTreeMap<(i64, i64), Pos2> = BTreeMap::new();
+        for w in &self.circuit.model.wires {
+            for pin in [&w.a, &w.b] {
+                let p = self.circuit.model.pin_pos(pin.part, &pin.pin);
+                let key = ((p.x / 10.0).round() as i64, (p.y / 10.0).round() as i64);
+                *counts.entry(key).or_insert(0) += 1;
+                spots.entry(key).or_insert(p);
+            }
+        }
+        counts
+            .into_iter()
+            .filter(|(_, n)| *n > 2)
+            .filter_map(|(key, _)| spots.get(&key).copied())
+            .collect()
+    }
+
+    /// Draw an instrument on the sheet: a small box with its terminals.
+    fn draw_instrument(&self, painter: &egui::Painter, rect: Rect, index: usize, selected: bool) {
+        let Some(part) = self.circuit.model.parts.get(index) else {
+            return;
+        };
+        let part = part.clone();
+        let Some(_kind) = part.instrument else { return };
+        let pins = part.pins();
+        let body = self.circuit.model.body_rect(index);
+        let screen = Rect::from_min_max(
+            self.circuit.view.w2s(rect, body.min),
+            self.circuit.view.w2s(rect, body.max),
+        );
+        let terminals: Vec<(&str, Pos2)> = pins
+            .iter()
+            .map(|name| {
+                let p = self.circuit.model.pin_pos(index, name);
+                (name.as_str(), self.circuit.view.w2s(rect, p))
+            })
+            .collect();
+        crate::instruments::draw_icon(
+            painter,
+            screen,
+            &part.id,
+            &terminals,
+            self.circuit.view.zoom,
+            selected,
+        );
     }
 
     fn circuit_input(&mut self, ui: &mut egui::Ui, rect: Rect) {
@@ -1194,6 +1453,17 @@ impl WireStudio {
         let zoom_delta = ui.input(|i| i.zoom_delta());
         let command = ui.input(|i| i.modifiers.command);
 
+        // Enter opens the panel of the selected instrument.
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter {
+            if let Some(Sel::Part(idx)) = self.circuit.selected {
+                let is_instrument = self.circuit.model.parts[idx].instrument.is_some();
+                if is_instrument && !self.circuit.open_instruments.contains(&idx) {
+                    self.circuit.open_instruments.push(idx);
+                }
+            }
+        }
+
         if let Some(p) = pos {
             if rect.contains(p) {
                 let mut factor = zoom_delta;
@@ -1212,6 +1482,8 @@ impl WireStudio {
         }
 
         if primary_pressed {
+            // The time of the click, in milliseconds since the start.
+            let now = (ui.input(|i| i.time) * 1000.0) as u64;
             if let Some(p) = pos {
                 if rect.contains(p) {
                     let world = self.circuit.view.s2w(rect, p);
@@ -1238,6 +1510,19 @@ impl WireStudio {
                     } else if let Some(idx) = self.circuit.model.hit_part(world) {
                         self.circuit.selected = Some(Sel::Part(idx));
                         let part = self.circuit.model.parts[idx].clone();
+                        // A second click opens the front panel of an
+                        // instrument, the way Multisim does.
+                        if part.instrument.is_some()
+                            && self.circuit.last_click.0 == idx
+                            && now.saturating_sub(self.circuit.last_click.1) < 600
+                        {
+                            self.circuit.last_click = (usize::MAX, 0);
+                            if !self.circuit.open_instruments.contains(&idx) {
+                                self.circuit.open_instruments.push(idx);
+                            }
+                        } else {
+                            self.circuit.last_click = (idx, now);
+                        }
                         let grab = world.to_vec2() - Vec2::new(part.x, part.y);
                         self.circuit.drag = Some(DragPart {
                             index: idx,
@@ -1325,6 +1610,22 @@ impl WireStudio {
                 self.circuit.status = format!("{elapsed:.1} ms");
                 self.circuit.error.clear();
                 self.status = self.tr("status.circuit_ok").to_string();
+                // The panels of the instruments come up with the results, the
+                // way Multisim shows them after a run.
+                let instruments: Vec<usize> = self
+                    .circuit
+                    .model
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.instrument.is_some())
+                    .map(|(i, _)| i)
+                    .collect();
+                for idx in instruments {
+                    if !self.circuit.open_instruments.contains(&idx) {
+                        self.circuit.open_instruments.push(idx);
+                    }
+                }
             }
             Err(e) => {
                 self.circuit.error = e.clone();
@@ -1465,7 +1766,7 @@ fn draw_plot(
         let gy = bottom - t * (bottom - top);
         painter.line_segment(
             [egui::pos2(left, gy), egui::pos2(right, gy)],
-            Stroke::new(0.6, GRID_STRONG),
+            Stroke::new(0.6, sheet::GRID_STRONG),
         );
         let value = y_min + (y_max - y_min) * (i as f64 / 4.0);
         painter.text(
@@ -1481,7 +1782,7 @@ fn draw_plot(
         let gx = left + t * (right - left);
         painter.line_segment(
             [egui::pos2(gx, top), egui::pos2(gx, bottom)],
-            Stroke::new(0.6, GRID_STRONG),
+            Stroke::new(0.6, sheet::GRID_STRONG),
         );
         let lxv = lx0 + lx_span * (i as f64 / 4.0);
         let xv = if log_x { 10f64.powf(lxv) } else { lxv };
@@ -1618,6 +1919,8 @@ pub fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 
 /// Route a wire as three straight segments, the way schematics are drawn:
 /// out of one pin, across, and into the other.
+/// The route of a wire: Multisim leaves a pin horizontally, turns by ninety
+/// degrees and enters the next pin horizontally.
 fn elbow(a: Pos2, b: Pos2) -> Vec<Pos2> {
     if (a.x - b.x).abs() < 0.5 || (a.y - b.y).abs() < 0.5 {
         return vec![a, b];

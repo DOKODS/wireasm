@@ -30,6 +30,8 @@ pub enum Family {
     Discrete,
     /// Instruments and other parts that only exist inside the simulator.
     Virtual,
+    /// The measuring instruments of the Multisim toolbar.
+    Instrument,
 }
 
 impl Family {
@@ -43,6 +45,7 @@ impl Family {
             Family::Analog => "analog",
             Family::Discrete => "discrete",
             Family::Virtual => "virtual",
+            Family::Instrument => "instrument",
         }
     }
 
@@ -56,6 +59,7 @@ impl Family {
             "analog" => Some(Family::Analog),
             "discrete" => Some(Family::Discrete),
             "virtual" => Some(Family::Virtual),
+            "instrument" => Some(Family::Instrument),
             _ => None,
         }
     }
@@ -71,6 +75,7 @@ impl Family {
             Family::Analog => "lib.analog",
             Family::Discrete => "lib.discrete",
             Family::Virtual => "lib.virtual",
+            Family::Instrument => "lib.instrument",
         }
     }
 }

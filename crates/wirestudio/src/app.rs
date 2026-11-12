@@ -542,6 +542,19 @@ impl WireStudio {
                 return;
             }
         }
+        // A source file belongs to the code editor, not to the graph.
+        if is_source_file(path) {
+            match self.editor.open(path) {
+                Ok(()) => {
+                    self.workspace = Workspace::Code;
+                    self.status = self
+                        .tr("status.code_opened")
+                        .replace("{}", &path.display().to_string());
+                }
+                Err(e) => self.error(e),
+            }
+            return;
+        }
         let parsed = Json::parse(&src)
             .map_err(|e| format!("JSON: {e}"))
             .and_then(|v| Graph::from_json_value(&v));
@@ -2231,6 +2244,7 @@ impl WireStudio {
         self.board_window(ctx);
         self.about_window(ctx);
         self.shortcuts_window(ctx);
+        self.instrument_windows(ctx);
     }
 
     fn board_window(&mut self, ctx: &egui::Context) {
@@ -2611,6 +2625,17 @@ impl eframe::App for WireStudio {
 }
 
 // ------------------------------------------------------------------ helpers
+
+/// Whether the file holds source code rather than a graph.
+fn is_source_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "ino" | "s" | "asm" | "rs" | "txt")
+    )
+}
 
 pub fn default_graph() -> Graph {
     let target = toolchain::host_target().unwrap_or(Target::Aarch64Macos);

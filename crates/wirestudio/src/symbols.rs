@@ -20,16 +20,18 @@ use eframe::egui::{self, Color32, FontId, Pos2, Stroke, Vec2};
 
 use wireasm_sim::schematic::{Part, PartKind};
 
+use crate::sheet;
+
 /// Line colour of a symbol.
-pub const LINE: Color32 = Color32::from_rgb(226, 231, 240);
+pub const LINE: Color32 = sheet::PART_LINE;
 /// Colour of the pins and their stubs.
-pub const PIN: Color32 = Color32::from_rgb(206, 214, 228);
+pub const PIN: Color32 = sheet::PIN;
 /// Colour of the letters inside a symbol.
-pub const TEXT: Color32 = Color32::from_rgb(226, 231, 240);
+pub const TEXT: Color32 = sheet::PART_LABEL;
 /// Colour of the muted captions.
-pub const MUTED: Color32 = Color32::from_rgb(150, 158, 176);
+pub const MUTED: Color32 = sheet::NODE_NUMBER;
 /// Fill of a symbol body.
-pub const FILL: Color32 = Color32::from_rgb(32, 36, 48);
+pub const FILL: Color32 = sheet::PART_FILL;
 
 /// Everything the drawing helpers need.
 pub struct Ctx<'a> {
@@ -61,7 +63,7 @@ impl Ctx<'_> {
 
     fn stroke(&self) -> Stroke {
         if self.selected {
-            Stroke::new(2.0 * self.zoom.max(0.5), Color32::from_rgb(96, 165, 250))
+            Stroke::new(2.0 * self.zoom.max(0.5), sheet::SELECT)
         } else {
             Stroke::new(1.4 * self.zoom.max(0.5), LINE)
         }

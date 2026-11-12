@@ -155,6 +155,8 @@ pub struct Part {
     pub catalog_units: Vec<crate::library::Unit>,
     /// Supply of a catalogue part.
     pub catalog_power: Option<crate::library::Power>,
+    /// The instrument this part is, when it is one.
+    pub instrument: Option<crate::netlist::InstrumentKind>,
 }
 
 impl Part {
@@ -176,6 +178,7 @@ impl Part {
             catalog: None,
             catalog_units: Vec::new(),
             catalog_power: None,
+            instrument: None,
         };
         match kind {
             PartKind::Resistor => p.value = 1000.0,
@@ -202,6 +205,11 @@ impl Part {
     /// A catalogue part names its pins after the signals of its units, the
     /// way the datasheet does.
     pub fn pins(&self) -> Vec<String> {
+        if let Some(kind) = self.instrument {
+            return (0..kind.channel_count())
+                .map(|i| crate::library_data::channel_label(kind, i))
+                .collect();
+        }
         if !self.catalog_units.is_empty() {
             let mut out: Vec<String> = Vec::new();
             for unit in &self.catalog_units {
@@ -236,9 +244,17 @@ impl Part {
         }
     }
 
+    /// The name of the instrument this part is.
+    pub fn instrument_label(&self) -> String {
+        match self.instrument {
+            Some(kind) => crate::library_data::instrument_title(kind).to_string(),
+            None => String::new(),
+        }
+    }
+
     /// Whether the part comes from the component library.
     pub fn is_catalog(&self) -> bool {
-        !self.catalog_units.is_empty()
+        !self.catalog_units.is_empty() || self.instrument.is_some()
     }
 
     /// The catalogue entry the part was placed from.
@@ -618,6 +634,9 @@ impl Schematic {
         let Some(p) = self.parts.get(part) else {
             return (0.0, 0.0);
         };
+        if p.instrument.is_some() {
+            return self.instrument_pin_offset(p, pin);
+        }
         if p.is_catalog() {
             return self.catalog_pin_offset(p, pin);
         }
@@ -637,6 +656,24 @@ impl Schematic {
                 }
             }
         }
+    }
+
+    /// The place of one terminal of an instrument: they sit on the left edge
+    /// of the box, the way the instrument symbols of Multisim do.
+    fn instrument_pin_offset(&self, part: &Part, pin: &str) -> (f32, f32) {
+        let kind = match part.instrument {
+            Some(k) => k,
+            None => return (0.0, 0.0),
+        };
+        let channels = kind.channel_count();
+        let index = crate::library_data::channel_label(kind, 0);
+        let _ = index;
+        let position = part.pins().iter().position(|n| n == pin).unwrap_or(0);
+        let half_w = CATALOG_W * 0.5;
+        let spacing = 14.0;
+        let total = (channels.saturating_sub(1)) as f32 * spacing;
+        let y = -total * 0.5 + position as f32 * spacing;
+        (-half_w, y)
     }
 
     /// The place of one pin of a catalogue part.
@@ -830,6 +867,26 @@ impl Schematic {
         circuit.description = self.description.clone();
         let mut has_ground = false;
         for (idx, part) in self.parts.iter().enumerate() {
+            // An instrument watches nodes and reports what it sees.
+            if let Some(kind) = part.instrument {
+                let mut pins: Vec<String> = Vec::new();
+                for name in part.pins() {
+                    let node = nets
+                        .get(&(idx, name.clone()))
+                        .cloned()
+                        .ok_or_else(|| format!("{} pin {name} is not wired", part.id))?;
+                    pins.push(node);
+                }
+                circuit.add(Component {
+                    id: part.id.clone(),
+                    kind: ComponentKind::Instrument(crate::netlist::Instrument {
+                        kind,
+                        channels: pins,
+                    }),
+                    pins: Vec::new(),
+                });
+                continue;
+            }
             // A catalogue part is a package of units: every unit becomes its
             // own component in the netlist.
             if part.is_catalog() {
@@ -1040,6 +1097,9 @@ impl Schematic {
                 m.insert("duty".into(), Json::Num(p.duty));
                 if let Some(key) = &p.catalog {
                     m.insert("catalog".into(), Json::Str(key.clone()));
+                    if let Some(kind) = p.instrument {
+                        m.insert("instrument".into(), Json::Str(kind.key().into()));
+                    }
                     let units = p
                         .catalog_units
                         .iter()
@@ -1161,6 +1221,13 @@ impl Schematic {
                 p.duty = item.get("duty").and_then(|x| x.as_f64()).unwrap_or(p.duty);
                 if let Some(key) = item.get("catalog").and_then(|x| x.as_str()) {
                     p.catalog = Some(key.to_string());
+                    if let Some(kind) = item
+                        .get("instrument")
+                        .and_then(|x| x.as_str())
+                        .and_then(crate::netlist::InstrumentKind::from_key)
+                    {
+                        p.instrument = Some(kind);
+                    }
                     if let Some(Json::Arr(units)) = item.get("units") {
                         for u in units {
                             let func = u
@@ -1470,6 +1537,49 @@ mod tests {
         let sol = sim.dc().unwrap();
         // Both inputs are high, so the NAND output is low.
         assert!(sol.node("out") < 0.5, "out={}", sol.node("out"));
+    }
+
+    #[test]
+    fn an_instrument_measures_its_nodes() {
+        // A scope on the output of a divider: the panel gets the node voltage.
+        let mut s = Schematic::empty();
+        let v = s.add_part(PartKind::Vsource, -160.0, 0.0);
+        s.parts[v].value = 12.0;
+        let r1 = s.add_part(PartKind::Resistor, -60.0, 0.0);
+        s.parts[r1].value = 10_000.0;
+        let r2 = s.add_part(PartKind::Resistor, 60.0, 0.0);
+        s.parts[r2].value = 4700.0;
+        let gnd = s.add_part(PartKind::Ground, 60.0, 90.0);
+        let mut scope = Part::new("XSC1".into(), PartKind::Gate, 180.0, 0.0);
+        scope.catalog = Some("scope".into());
+        scope.instrument = Some(crate::netlist::InstrumentKind::Scope);
+        s.parts.push(scope);
+        s.wire(v, "1", r1, "1");
+        s.wire(r1, "2", r2, "1");
+        s.wire(r2, "2", gnd, "0");
+        s.wire(v, "2", gnd, "0");
+        s.wire(r2, "1", 4, "A");
+        s.probe(r2, "1", "out");
+        let circuit = s.netlist().unwrap();
+        let mut sim = Simulator::new(&circuit, s.opts.clone()).unwrap();
+        let trace = sim.transient().unwrap();
+        let channels = sim.instrument_channels();
+        assert_eq!(channels.len(), 4, "the scope has four channels");
+        let measured = &trace.instruments["XSC1"];
+        let first = &measured[&0];
+        assert!(!first.is_empty());
+        // The scope watches the divider output: 3.84 V.
+        assert!(
+            (first[0] - 12.0 * 4700.0 / 14700.0).abs() < 1e-3,
+            "scope saw {}",
+            first[0]
+        );
+        // A channel that is wired to nothing reads zero.
+        assert!(
+            measured[&3].iter().all(|v| v.abs() < 1e-9),
+            "an unwired channel sees {}",
+            measured[&3][0]
+        );
     }
 
     #[test]

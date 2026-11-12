@@ -243,6 +243,33 @@ def cmos_oscillator():
     )
 
 
+def scope_demo():
+    """An RC filter watched by an oscilloscope, the way Multisim shows it."""
+    # Parts: 0 = source, 1 = resistor, 2 = capacitor, 3 = ground, 4 = scope.
+    return circuit(
+        "scope_demo",
+        [
+            part("V1", "vsource", -230, -40, value=0, wave="sine", amp=2, freq=1000),
+            part("R1", "resistor", -70, -40, value=1000),
+            part("C1", "capacitor", 90, -40, value=1e-6),
+            part("GND1", "ground", 90, 60),
+            part("XSC1", "gate", 250, -20, catalog="scope", instrument="scope"),
+        ],
+        [
+            wire(0, "1", 1, "1"),
+            wire(1, "2", 2, "1"),
+            wire(2, "2", 3, "0"),
+            wire(0, "2", 3, "0"),
+            # The scope watches the input and the output.
+            wire(4, "A", 0, "1"),
+            wire(4, "B", 2, "1"),
+        ],
+        [{"part": 2, "pin": "1", "name": "out"}],
+        analysis="tran", dt=2e-5, stop=4e-3,
+        description="RC filter watched by a four channel oscilloscope",
+    )
+
+
 def main():
     files = {
         "circuit_divider.json": divider(),
@@ -252,6 +279,7 @@ def main():
         "circuit_ttl_nand.json": ttl_nand(),
         "circuit_ttl_counter.json": ttl_counter(),
         "circuit_cmos_oscillator.json": cmos_oscillator(),
+        "circuit_scope_demo.json": scope_demo(),
     }
     for name, data in files.items():
         path = os.path.join(OUT, name)

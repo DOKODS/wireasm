@@ -145,6 +145,7 @@ fn run() -> Result<(), String> {
             if let Some(mcu) = sim.mcu() {
                 print_uart(mcu);
             }
+            print_instruments(&trace);
             if let Some(path) = csv {
                 std::fs::write(&path, trace.to_csv())
                     .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -194,6 +195,28 @@ fn load_circuit(src: &str) -> Result<(Circuit, Vec<McuBinding>, Option<f64>), St
         return Ok((schematic.netlist()?, bindings, vdd));
     }
     Ok((Circuit::from_json(&value)?, Vec::new(), None))
+}
+
+/// What the instruments of the circuit measured.
+fn print_instruments(trace: &wireasm_sim::Trace) {
+    if trace.instruments.is_empty() {
+        return;
+    }
+    println!("Инструменты:");
+    for (id, channels) in &trace.instruments {
+        for (index, values) in channels {
+            if values.is_empty() {
+                continue;
+            }
+            let last = values[values.len() - 1];
+            let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+            println!(
+                "  {id} канал {}: последнее {last:.5} В, от {min:.5} до {max:.5}",
+                index + 1
+            );
+        }
+    }
 }
 
 fn print_trace(trace: &wireasm_sim::Trace) {

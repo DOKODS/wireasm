@@ -9,7 +9,9 @@ mod circuit;
 mod editor;
 mod i18n;
 mod inspector;
+mod instruments;
 mod settings;
+mod sheet;
 mod symbols;
 
 use std::path::PathBuf;
