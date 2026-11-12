@@ -1,5 +1,5 @@
 @ ============================================================
-@ WireASM 0.3.0 — generated assembler
+@ WireASM 0.4.0 — generated assembler
 @ graph: stm32_blink
 @ target: stm32f411
 @ entry: main

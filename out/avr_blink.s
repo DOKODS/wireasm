@@ -1,5 +1,5 @@
 ; ============================================================
-; WireASM 0.2.0 — generated assembler
+; WireASM 0.4.0 — generated assembler
 ; graph: avr_blink
 ; target: avr-atmega328p
 ; entry: main
@@ -228,4 +228,4 @@ Warg0:
 Warg1:
 	.zero 2
 
-; end of avr-atmega328p — 229 instructions/lines, 84 labels
+; end of avr-atmega328p — 229 lines, 84 labels
