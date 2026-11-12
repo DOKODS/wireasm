@@ -11,9 +11,11 @@ pub struct Settings {
     pub lang: Option<String>,
     pub last_dir: Option<String>,
     pub out_dir: Option<String>,
-    /// Serial port and board used for AVR uploads.
+    /// Serial port used for AVR and ESP uploads, board for AVR.
     pub avr_port: Option<String>,
     pub avr_board: Option<String>,
+    /// STM32 upload transport: `stlink` (default) or `dfu`.
+    pub stm32_transport: Option<String>,
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -62,6 +64,7 @@ impl Settings {
             out_dir: s("outDir"),
             avr_port: s("avrPort"),
             avr_board: s("avrBoard"),
+            stm32_transport: s("stm32Transport"),
         }
     }
 
@@ -85,6 +88,9 @@ impl Settings {
         }
         if let Some(board) = &self.avr_board {
             m.insert("avrBoard".to_string(), Json::Str(board.clone()));
+        }
+        if let Some(transport) = &self.stm32_transport {
+            m.insert("stm32Transport".to_string(), Json::Str(transport.clone()));
         }
         let _ = std::fs::write(path, Json::Obj(m).stringify_pretty());
     }

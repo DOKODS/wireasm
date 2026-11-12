@@ -17,6 +17,10 @@ const A64_REGS: &[&str] = &[
 const X64_REGS: &[&str] = &[
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
 ];
+const STM32_REGS: &[&str] = &[
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr",
+    "pc",
+];
 const AVR_REGS: &[&str] = &[
     "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13", "r14",
     "r15", "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23", "r24", "r25", "r26", "r27",
@@ -75,6 +79,26 @@ impl WireStudio {
                 ui.label(RichText::new(self.tr("inspector.properties")).strong());
                 ui.add_space(2.0);
 
+                let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
+                let max_pin: u64 = if target.is_stm32() {
+                    15
+                } else if target == Target::Esp32 {
+                    39
+                } else if target == Target::Esp8266 {
+                    16
+                } else {
+                    19
+                };
+                let max_adc: u64 = if target.is_stm32() {
+                    15
+                } else if target == Target::Esp32 {
+                    39
+                } else if target == Target::Esp8266 {
+                    1
+                } else {
+                    7
+                };
+
                 match node.kind.as_str() {
                     "Const" => self.prop_value(&node.id, "value", ui),
                     "VarGet" | "VarSet" => self.prop_variable(&node.id, ui),
@@ -90,7 +114,16 @@ impl WireStudio {
                     }
                     "RegGet" | "RegSet" => self.prop_register(&node.id, ui),
                     "McuPinMode" => {
-                        self.prop_range(&node.id, "pin", "inspector.pin", 0, 19, ui);
+                        if target.is_stm32() {
+                            self.prop_choice(
+                                &node.id,
+                                "port",
+                                "inspector.port",
+                                &["A", "B", "C", "D", "E", "F", "G", "H"],
+                                ui,
+                            );
+                        }
+                        self.prop_range(&node.id, "pin", "inspector.pin", 0, max_pin, ui);
                         self.prop_choice(
                             &node.id,
                             "mode",
@@ -101,7 +134,16 @@ impl WireStudio {
                         ui.label(RichText::new(self.tr("inspector.pin_hint")).small().weak());
                     }
                     "McuDigitalWrite" | "McuDigitalRead" => {
-                        self.prop_range(&node.id, "pin", "inspector.pin", 0, 19, ui);
+                        if target.is_stm32() {
+                            self.prop_choice(
+                                &node.id,
+                                "port",
+                                "inspector.port",
+                                &["A", "B", "C", "D", "E", "F", "G", "H"],
+                                ui,
+                            );
+                        }
+                        self.prop_range(&node.id, "pin", "inspector.pin", 0, max_pin, ui);
                         ui.label(RichText::new(self.tr("inspector.pin_hint")).small().weak());
                     }
                     "McuUartInit" => {
@@ -111,7 +153,7 @@ impl WireStudio {
                         self.prop_text(&node.id, "text", "inspector.text", true, ui)
                     }
                     "McuAdcRead" => {
-                        self.prop_range(&node.id, "channel", "inspector.channel", 0, 7, ui)
+                        self.prop_range(&node.id, "channel", "inspector.channel", 0, max_adc, ui)
                     }
                     "McuRegisterWrite" | "McuRegisterRead" => {
                         self.prop_text(&node.id, "address", "inspector.address", false, ui);
@@ -332,6 +374,8 @@ impl WireStudio {
         let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
         let regs = if target.is_avr() {
             AVR_REGS
+        } else if target.is_stm32() {
+            STM32_REGS
         } else if target.is_aarch64() {
             A64_REGS
         } else {

@@ -281,10 +281,13 @@ mod tests {
         g.nodes[1].props.insert("func".into(), "print_u64".into());
         let out = compile(&g);
         assert!(!out.ok);
-        assert!(out
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("not available on AVR")));
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("not available on this target")),
+            "{:?}",
+            out.diagnostics
+        );
     }
 
     #[test]
@@ -327,6 +330,89 @@ mod tests {
         assert!(out.asm.contains(".section .data"), "{}", out.asm);
         assert!(out.asm.contains("call uart_write_str"), "{}", out.asm);
         assert!(out.asm.contains("ldi r24, 103"), "{}", out.asm); // 9600 baud auto-init (UBRR)
+    }
+
+    #[test]
+    fn stm32_graph_compiles_to_thumb_asm() {
+        let mut g = graph(
+            &[
+                ("e", "Entry"),
+                ("p", "McuPinMode"),
+                ("w", "McuDigitalWrite"),
+                ("r", "Return"),
+            ],
+            &[
+                ("e", "exec", "p", "exec"),
+                ("p", "exec", "w", "exec"),
+                ("w", "exec", "r", "exec"),
+            ],
+        );
+        g.target = "stm32f411".into();
+        for n in &mut g.nodes[1..3] {
+            n.props.insert("port".into(), "C".into());
+            n.props.insert("pin".into(), "13".into());
+        }
+        g.nodes[1].props.insert("mode".into(), "out".into());
+        let out = compile(&g);
+        assert!(out.ok, "{:?}", out.diagnostics);
+        assert!(out.asm.contains(".cpu cortex-m4"), "{}", out.asm);
+        assert!(out.asm.contains(".thumb_func"), "{}", out.asm);
+        assert!(out.asm.contains("main:"), "{}", out.asm);
+        assert!(out.asm.contains("@"), "{}", out.asm);
+    }
+
+    #[test]
+    fn esp_graph_compiles_to_arduino_sketch() {
+        let mut g = graph(
+            &[
+                ("e", "Entry"),
+                ("p", "McuPinMode"),
+                ("w", "McuDigitalWrite"),
+                ("r", "Return"),
+            ],
+            &[
+                ("e", "exec", "p", "exec"),
+                ("p", "exec", "w", "exec"),
+                ("w", "exec", "r", "exec"),
+            ],
+        );
+        g.target = "esp32".into();
+        g.nodes[1].props.insert("pin".into(), "2".into());
+        g.nodes[1].props.insert("mode".into(), "out".into());
+        g.nodes[2].props.insert("pin".into(), "2".into());
+        let out = compile(&g);
+        assert!(out.ok, "{:?}", out.diagnostics);
+        assert!(out.asm.contains("#include <Arduino.h>"), "{}", out.asm);
+        assert!(out.asm.contains("void setup()"), "{}", out.asm);
+        assert!(out.asm.contains("void loop()"), "{}", out.asm);
+        assert!(out.asm.contains("pinMode(2, OUTPUT)"), "{}", out.asm);
+    }
+
+    #[test]
+    fn source_targets_emit_host_programs() {
+        let cases = [
+            ("c", "#include <stdio.h>", "printf(\"", "int main("),
+            (
+                "cpp",
+                "using u64 = std::uint64_t;",
+                "printf(\"",
+                "int main(",
+            ),
+            ("csharp", "using System;", "Console.Write(\"", "Main("),
+        ];
+        for (target, header, print, entry) in cases {
+            let mut g = graph(
+                &[("e", "Entry"), ("s", "PrintStr"), ("r", "Return")],
+                &[("e", "exec", "s", "exec"), ("s", "exec", "r", "exec")],
+            );
+            g.target = target.into();
+            g.nodes[1].props.insert("text".into(), "hi".into());
+            let out = compile(&g);
+            assert!(out.ok, "{target}: {:?}", out.diagnostics);
+            assert!(out.asm.contains(header), "{target}: {}", out.asm);
+            assert!(out.asm.contains(print), "{target}: {}", out.asm);
+            assert!(out.asm.contains(entry), "{target}: {}", out.asm);
+        }
     }
 
     #[test]

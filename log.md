@@ -1,4 +1,4 @@
-# Журнал WireASM / WireStudio 0.2.0
+# Журнал WireASM / WireStudio
 
 ## 2026-11-07
 
@@ -328,3 +328,78 @@ AVR (Arduino Uno/Nano), STM32 — следующим этапом.
   `x86_64-windows` (3.7 МБ).
 - Скачанный из релиза `aarch64-macos`: `wireasm --help` печатает 0.2.0,
   `examples/hello.json --run` — `Hello from WireASM!`, код 0.
+
+## 2026-11-12 — 0.3.0
+
+### Цели
+
+- `Target`: `Stm32F411`, `Esp32`, `Esp8266`, `CLang`, `Cpp`, `CSharp`.
+  Синонимы, `label()`, `family()`, `is_stm32/is_esp/is_arduino/is_source`,
+  расширенные `is_mcu`, `entry_symbol` и `source_extension`.
+- Старые пять целей не тронуты: поведение хоста и AVR прежнее.
+
+### Кодогенераторы
+
+- `codegen/stm32.rs`: полный образ Cortex-M4 — таблица векторов,
+  `Reset_Handler`, `Default_Handler`, `main`, SysTick-задержки, USART2,
+  GPIO, АЦП, `udiv32`; `.thumb_func` на каждой ветке.
+- `codegen/arduino.rs`: `setup()`/`loop()`, `pinMode`, `digitalWrite`,
+  `delay`, `Serial`, `analogRead`; переменные как `static uint32_t`.
+- `codegen/c_lang.rs`: C, C++, C# — общий `main()` с метками и `goto`;
+  для C# класс `Program` и `Main()`.
+- Диспетчер, шапка файла, префиксы комментариев и `VERSION = "0.3.0"`.
+
+### Тулчейн и CLI
+
+- `arm-none-eabi-gcc -nostdlib` с линкерным скриптом STM32F411
+  (flash 0x08000000/512K, RAM 0x20000000/128K); `st-flash`/`dfu-util`
+  для загрузки.
+- `arduino-cli`: FQBN для ESP32/ESP8266, проверка установленного ядра,
+  `compile` и `upload`.
+- `build_source` для C/C++/C#; `--run` для хостовых исходников.
+- CLI: цели в `--target`, расширение результата по цели, `--build`,
+  `--flash stlink|dfu|<порт>`, обновлённая справка.
+
+### Валидатор
+
+- Семейные проверки пинов: AVR 0–19, STM32 порт A–H и пин 0–15,
+  ESP32 0–39, ESP8266 0–16; каналы АЦП и регистры по семействам.
+- 32-битные адреса и предупреждение об усечении `Const` для STM32/ESP.
+- `Call`/`Syscall`/свои узлы запрещены на MCU; `Call` разрешён в C/C++/C#.
+
+### WireStudio
+
+- `editor.rs`: вкладки, номера строк, свой лексер и подсветка под C, C++,
+  C#, Rust, asm, JSON; открытие/сохранение, обновление сгенерированной
+  вкладки, сборка и запуск.
+- `Workspace::{Graph, Code}`, переключатель в шапке и меню View.
+- Меню целей, F6/F7 для AVR/STM32/ESP, окно платы по цели, транспорт STM32.
+- Инспектор STM32: порт/пин/режим, регистры `r0..r12/sp/lr/pc`.
+- i18n: цели, меню кода, сообщения сборки, новые примеры.
+
+### Примеры и тесты
+
+- `stm32_blink`, `stm32_uart_hello`, `esp32_blink`, `esp32_uart_hello`,
+  `c_hello`, `cpp_hello`, `csharp_hello`; добавлены в меню «Примеры».
+- Тесты: STM32 Thumb-2, ESP-скетч, три исходника. Всего 19, все зелёные.
+- Найден и исправлен баг: `PrintU64` на STM32 звал `udiv32`, но helper
+  не эмитился — теперь `number` включает `divide`.
+
+### Проверено
+
+- `cargo test --workspace` — 19/19; `cargo check` по всему workspace.
+- `wireasm examples/stm32_blink.json --build` — text 244, bss 260;
+  `stm32_uart_hello` — text 411, bss 260.
+- `wireasm examples/c_hello.json --run` и `cpp_hello.json --run` печатают
+  `Hello from WireASM C!` и `n = 5`, код 0.
+- `wireasm examples/esp32_blink.json --build` — понятная ошибка об
+  отсутствующем ядре `esp32:esp32`.
+- `csharp_hello --run` — понятная ошибка об отсутствующем `dotnet`.
+- Загрузка на платы не проверялась: плат, `st-flash`, `dfu-util` нет.
+
+### Осталось для выпуска
+
+- Собрать локальный архив `aarch64-macos`, обновить `releases/`.
+- Коммит, тег `v0.3.0`, push, проверить CI и ассеты релиза.
+- После выпуска: переименовать папку в `WIREASM_AARCH64_X86_0.3.0` и
+  обновить индекс проектов.

@@ -1,0 +1,128 @@
+{
+  "name": "csharp_hello",
+  "target": "csharp",
+  "variables": [
+    {
+      "name": "n",
+      "init": 5
+    }
+  ],
+  "nodes": [
+    {
+      "id": "entry",
+      "kind": "Entry",
+      "x": 80,
+      "y": 240,
+      "props": {}
+    },
+    {
+      "id": "msg",
+      "kind": "PrintStr",
+      "x": 300,
+      "y": 200,
+      "props": {
+        "text": "Hello from WireASM C!\nn = "
+      }
+    },
+    {
+      "id": "num",
+      "kind": "PrintU64",
+      "x": 620,
+      "y": 240,
+      "props": {}
+    },
+    {
+      "id": "get",
+      "kind": "VarGet",
+      "x": 440,
+      "y": 400,
+      "props": {
+        "name": "n"
+      }
+    },
+    {
+      "id": "set",
+      "kind": "VarSet",
+      "x": 820,
+      "y": 240,
+      "props": {
+        "name": "n"
+      }
+    },
+    {
+      "id": "sum",
+      "kind": "BinOp",
+      "x": 620,
+      "y": 400,
+      "props": {
+        "op": "mul"
+      }
+    },
+    {
+      "id": "two",
+      "kind": "Const",
+      "x": 440,
+      "y": 540,
+      "props": {
+        "value": "2"
+      }
+    },
+    {
+      "id": "ret",
+      "kind": "Return",
+      "x": 1080,
+      "y": 240,
+      "props": {}
+    }
+  ],
+  "edges": [
+    {
+      "fromNode": "entry",
+      "fromPin": "exec",
+      "toNode": "msg",
+      "toPin": "exec"
+    },
+    {
+      "fromNode": "msg",
+      "fromPin": "exec",
+      "toNode": "num",
+      "toPin": "exec"
+    },
+    {
+      "fromNode": "get",
+      "fromPin": "value",
+      "toNode": "num",
+      "toPin": "value"
+    },
+    {
+      "fromNode": "num",
+      "fromPin": "exec",
+      "toNode": "set",
+      "toPin": "exec"
+    },
+    {
+      "fromNode": "sum",
+      "fromPin": "result",
+      "toNode": "set",
+      "toPin": "value"
+    },
+    {
+      "fromNode": "get",
+      "fromPin": "value",
+      "toNode": "sum",
+      "toPin": "a"
+    },
+    {
+      "fromNode": "two",
+      "fromPin": "value",
+      "toNode": "sum",
+      "toPin": "b"
+    },
+    {
+      "fromNode": "set",
+      "fromPin": "exec",
+      "toNode": "ret",
+      "toPin": "exec"
+    }
+  ]
+}

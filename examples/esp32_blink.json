@@ -1,0 +1,30 @@
+{
+  "name": "esp32_blink",
+  "target": "esp32",
+  "variables": [],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 80, "y": 240, "props": {} },
+    { "id": "pinmode", "kind": "McuPinMode", "x": 300, "y": 240, "props": { "pin": "2", "mode": "out" } },
+    { "id": "loop", "kind": "Anchor", "x": 520, "y": 240, "props": {} },
+    { "id": "hi", "kind": "McuDigitalWrite", "x": 720, "y": 160, "props": { "pin": "2" } },
+    { "id": "one", "kind": "Const", "x": 520, "y": 420, "props": { "value": "1" } },
+    { "id": "wait_hi", "kind": "McuDelayMs", "x": 940, "y": 160, "props": {} },
+    { "id": "ms500", "kind": "Const", "x": 720, "y": 540, "props": { "value": "500" } },
+    { "id": "lo", "kind": "McuDigitalWrite", "x": 1160, "y": 160, "props": { "pin": "2" } },
+    { "id": "zero", "kind": "Const", "x": 940, "y": 420, "props": { "value": "0" } },
+    { "id": "wait_lo", "kind": "McuDelayMs", "x": 1380, "y": 160, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "pinmode", "toPin": "exec" },
+    { "fromNode": "pinmode", "fromPin": "exec", "toNode": "loop", "toPin": "exec" },
+    { "fromNode": "loop", "fromPin": "exec", "toNode": "hi", "toPin": "exec" },
+    { "fromNode": "one", "fromPin": "value", "toNode": "hi", "toPin": "value" },
+    { "fromNode": "hi", "fromPin": "exec", "toNode": "wait_hi", "toPin": "exec" },
+    { "fromNode": "ms500", "fromPin": "value", "toNode": "wait_hi", "toPin": "value" },
+    { "fromNode": "wait_hi", "fromPin": "exec", "toNode": "lo", "toPin": "exec" },
+    { "fromNode": "zero", "fromPin": "value", "toNode": "lo", "toPin": "value" },
+    { "fromNode": "lo", "fromPin": "exec", "toNode": "wait_lo", "toPin": "exec" },
+    { "fromNode": "ms500", "fromPin": "value", "toNode": "wait_lo", "toPin": "value" },
+    { "fromNode": "wait_lo", "fromPin": "exec", "toNode": "loop", "toPin": "exec" }
+  ]
+}

@@ -3,6 +3,42 @@
 All notable changes to WireASM and WireStudio are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-11-12
+
+### Added
+
+- STM32 target `stm32f411` (aliases `stm32`, `stm32f4`, `cortex-m4`,
+  `blackpill`): bare-metal Cortex-M4 Thumb-2 assembly with a vector table,
+  reset handler, SysTick delays, USART2 output, GPIO and ADC helpers.
+  Built by `arm-none-eabi-gcc -nostdlib` with a generated linker script;
+  `.elf`, `.hex` and `.bin` land in `out/`.
+- ESP32 and ESP8266 targets: the graph becomes an Arduino C++ sketch
+  (`setup()`/`loop()`) built with `arduino-cli` and the matching core.
+- Host source targets `c`, `cpp` and `csharp`: a readable `main()` with
+  `goto` flow, built with the system compiler or `dotnet`.
+- `wirestudio`: classic code editor workspace with tabs, line numbers,
+  VS Code-like syntax highlighting, open/save, generated-file refresh, and
+  build/run for the current target. Graph/Code switch in the toolbar and
+  View menu.
+- Target-aware pin validation: AVR 0–19, STM32 ports A–H with pins 0–15,
+  ESP32 0–39, ESP8266 0–16; per-family ADC ranges and register names.
+- 32-bit truncation warnings for STM32 and ESP, STM32 register validation,
+  and a clear error when `Call`/`Syscall`/custom nodes are used on an MCU
+  or source target.
+- CLI: target-aware `--build`, `--flash` (`stlink`/`dfu` for STM32, serial
+  for ESP), `--run` for C/C++/C#, and output extensions from the target.
+- WireStudio: target picker, firmware build/flash jobs for every MCU,
+  STM32 port inspector, board window per target, and en/ru strings for all
+  new controls.
+- Examples: `stm32_blink`, `stm32_uart_hello`, `esp32_blink`,
+  `esp32_uart_hello`, `c_hello`, `cpp_hello`, `csharp_hello`.
+- Tests for STM32 Thumb assembly, the Arduino sketch backend, and the three
+  source targets.
+
+### Fixed
+
+- STM32 `PrintU64` now pulls in the `udiv32` helper it calls.
+
 ## [0.2.0] — 2026-11-11
 
 ### Added

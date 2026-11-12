@@ -11,6 +11,7 @@ use wireasm_core::model::{
 };
 use wireasm_core::{artifact_stem, compile, toolchain, CompileOutput, Severity};
 
+use crate::editor::{CodeEditor, Syntax, Workspace};
 use crate::i18n::{t, Lang};
 use crate::settings::Settings;
 
@@ -49,6 +50,41 @@ pub const EXAMPLES: &[(&str, &str, &str)] = &[
         "avr_uart",
         "example.avr_uart",
         include_str!("../../../examples/avr_uart_hello.json"),
+    ),
+    (
+        "stm32_blink",
+        "example.stm32_blink",
+        include_str!("../../../examples/stm32_blink.json"),
+    ),
+    (
+        "stm32_uart",
+        "example.stm32_uart",
+        include_str!("../../../examples/stm32_uart_hello.json"),
+    ),
+    (
+        "esp32_blink",
+        "example.esp32_blink",
+        include_str!("../../../examples/esp32_blink.json"),
+    ),
+    (
+        "esp32_uart",
+        "example.esp32_uart",
+        include_str!("../../../examples/esp32_uart_hello.json"),
+    ),
+    (
+        "c_hello",
+        "example.c_hello",
+        include_str!("../../../examples/c_hello.json"),
+    ),
+    (
+        "cpp_hello",
+        "example.cpp_hello",
+        include_str!("../../../examples/cpp_hello.json"),
+    ),
+    (
+        "csharp_hello",
+        "example.csharp_hello",
+        include_str!("../../../examples/csharp_hello.json"),
     ),
 ];
 
@@ -199,6 +235,8 @@ pub enum Action {
     About,
     SetLang(Option<Lang>),
     SetTarget(Target),
+    CodeOpen,
+    CodeNew,
 }
 
 pub struct WireStudio {
@@ -226,6 +264,8 @@ pub struct WireStudio {
     pub show_shortcuts: bool,
     pub board_open: bool,
     pub avr_ports: Vec<String>,
+    pub workspace: Workspace,
+    pub editor: CodeEditor,
     pub allow_close: bool,
     pub job: Option<Job>,
     pub undo: Vec<String>,
@@ -271,6 +311,8 @@ impl WireStudio {
             show_shortcuts: false,
             board_open: false,
             avr_ports: Vec::new(),
+            workspace: Workspace::Graph,
+            editor: CodeEditor::new(),
             allow_close: false,
             job: None,
             undo: Vec::new(),
@@ -352,9 +394,12 @@ impl WireStudio {
                 self.tab = BottomTab::Problems;
             }
         }
+        if self.out.ok {
+            self.refresh_generated_tab();
+        }
     }
 
-    fn error(&mut self, msg: impl Into<String>) {
+    pub(crate) fn error(&mut self, msg: impl Into<String>) {
         let msg = msg.into();
         self.console.push(msg.clone());
         self.status = msg;
@@ -374,7 +419,7 @@ impl WireStudio {
             })
     }
 
-    fn remember_dir(&mut self, path: &Path) {
+    pub(crate) fn remember_dir(&mut self, path: &Path) {
         if let Some(parent) = path.parent() {
             self.settings.last_dir = Some(parent.display().to_string());
             self.settings.save();
@@ -385,7 +430,11 @@ impl WireStudio {
         format!("{}.{}", artifact_stem(&self.graph), ext)
     }
 
-    fn pick_open(&mut self, title: &str, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+    pub(crate) fn pick_open(
+        &mut self,
+        title: &str,
+        filters: &[(&str, &[&str])],
+    ) -> Option<PathBuf> {
         let mut dlg = rfd::FileDialog::new().set_title(title);
         if let Some(dir) = self.dialog_dir() {
             dlg = dlg.set_directory(dir);
@@ -396,7 +445,7 @@ impl WireStudio {
         dlg.pick_file()
     }
 
-    fn pick_save(
+    pub(crate) fn pick_save(
         &mut self,
         title: &str,
         filters: &[(&str, &[&str])],
@@ -503,9 +552,10 @@ impl WireStudio {
         let parsed = Json::parse(src).and_then(|v| Graph::from_json_value(&v));
         match parsed {
             Ok(mut graph) => {
-                // Host examples follow the machine; AVR examples keep their MCU target.
+                // Host assembly examples follow the machine; MCU and source
+                // examples keep the target they were written for.
                 if Target::parse(&graph.target)
-                    .map(|t| !t.is_avr())
+                    .map(|t| t.is_host_asm())
                     .unwrap_or(true)
                 {
                     if let Some(host) = toolchain::host_target() {
@@ -749,10 +799,26 @@ impl WireStudio {
             Action::New => self.ask_or(After::New),
             Action::Open => self.ask_or(After::Open),
             Action::Save => {
-                self.save(false);
+                if self.workspace == Workspace::Code {
+                    self.code_save(false);
+                } else {
+                    self.save(false);
+                }
             }
             Action::SaveAs => {
-                self.save(true);
+                if self.workspace == Workspace::Code {
+                    self.code_save(true);
+                } else {
+                    self.save(true);
+                }
+            }
+            Action::CodeOpen => {
+                self.workspace = Workspace::Code;
+                self.code_open();
+            }
+            Action::CodeNew => {
+                let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
+                self.code_new(Syntax::from_target(target));
             }
             Action::ExportAsm => self.export_asm(),
             Action::ImportLibrary => self.import_library(),
@@ -871,23 +937,33 @@ impl WireStudio {
             self.error(self.tr("status.unknown_target"));
             return;
         };
+        if target.is_mcu() {
+            self.firmware_job(ctx, false);
+            return;
+        }
         if !toolchain::can_build(target) {
             self.status = self.tr("status.host_only").replace("{}", target.as_str());
             return;
         }
-        let asm = self.out.asm.clone();
+        let source = self.out.asm.clone();
         let stem = artifact_stem(&self.graph);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| -> Result<String, String> {
                 let dir = std::env::temp_dir().join("wirestudio");
                 std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
-                let asm_path = dir.join(format!("{stem}.s"));
-                let exe_path = dir.join(format!("{stem}-{}", std::process::id()));
-                std::fs::write(&asm_path, asm).map_err(|e| format!("write asm: {e}"))?;
-                toolchain::assemble(&asm_path, &exe_path, target)?;
-                let run = toolchain::run(&exe_path, 5)?;
-                let mut log = format!("$ {}:{} ({})\n", asm_path.display(), stem, target.as_str());
+                let (program, label) = if target.is_source() {
+                    let build = toolchain::build_source(&source, &dir, &stem, target)?;
+                    (build.exe, build.source)
+                } else {
+                    let asm_path = dir.join(format!("{stem}.s"));
+                    let exe_path = dir.join(format!("{stem}-{}", std::process::id()));
+                    std::fs::write(&asm_path, source).map_err(|e| format!("write asm: {e}"))?;
+                    toolchain::assemble(&asm_path, &exe_path, target)?;
+                    (exe_path, asm_path)
+                };
+                let run = toolchain::run(&program, 5)?;
+                let mut log = format!("$ {}:{stem} ({})\n", label.display(), target.as_str());
                 log.push_str(&run.stdout);
                 log.push_str(&run.stderr);
                 if run.timed_out {
@@ -923,10 +999,13 @@ impl WireStudio {
         if self.settings.avr_board.is_none() {
             self.settings.avr_board = Some("uno".to_string());
         }
+        if self.settings.stm32_transport.is_none() {
+            self.settings.stm32_transport = Some("stlink".to_string());
+        }
         self.board_open = true;
     }
 
-    fn firmware_dir(&self) -> PathBuf {
+    pub(crate) fn firmware_dir(&self) -> PathBuf {
         if let Some(dir) = &self.settings.out_dir {
             return PathBuf::from(dir);
         }
@@ -936,8 +1015,9 @@ impl WireStudio {
             .unwrap_or_else(|| PathBuf::from("out"))
     }
 
-    /// Compile the graph to AVR assembler, then build `.elf/.hex/.bin` with
-    /// avr-gcc and, when `flash` is set, upload the hex with avrdude.
+    /// Compile the graph, then build firmware for the current target: AVR
+    /// (`.elf/.hex/.bin` via avr-gcc), STM32 (via arm-none-eabi-gcc) or ESP
+    /// (an Arduino sketch via arduino-cli). With `flash`, upload it as well.
     fn firmware_job(&mut self, ctx: &egui::Context, flash: bool) {
         self.compile_now(false);
         if !self.out.ok {
@@ -951,23 +1031,42 @@ impl WireStudio {
             self.error(self.tr("status.unknown_target"));
             return;
         };
-        if !target.is_avr() {
-            self.status = self.tr("status.avr_only").to_string();
+        if !target.is_mcu() {
+            self.status = self.tr("status.mcu_only").to_string();
             self.console.push(self.status.clone());
             return;
         }
-        if toolchain::avr_tools().is_none() {
+        if !toolchain::can_build(target) {
             self.status = self.tr("status.no_toolchain").to_string();
             self.console.push(self.status.clone());
+            match target {
+                Target::Stm32F411 => self
+                    .console
+                    .push("install: brew install arm-none-eabi-gcc".to_string()),
+                Target::Esp32 | Target::Esp8266 => self.console.push(format!(
+                    "install: brew install arduino-cli && arduino-cli core install {}",
+                    toolchain::esp_core_name(target).unwrap_or("")
+                )),
+                Target::AvrAtmega328p => self
+                    .console
+                    .push("install: Arduino IDE or avr-gcc/avrdude".to_string()),
+                _ => {}
+            }
             self.tab = BottomTab::Console;
             return;
         }
+        let needs_port = target.is_avr() || target.is_esp();
         let port = self.settings.avr_port.clone();
-        if flash && port.is_none() {
+        if flash && needs_port && port.is_none() {
             self.status = self.tr("status.need_port").to_string();
             self.open_board_settings();
             return;
         }
+        let transport = self
+            .settings
+            .stm32_transport
+            .clone()
+            .unwrap_or_else(|| "stlink".to_string());
         let asm = self.out.asm.clone();
         let stem = artifact_stem(&self.graph);
         let out_dir = self.firmware_dir();
@@ -979,24 +1078,69 @@ impl WireStudio {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| -> Result<String, String> {
-                let build = toolchain::build_avr(&asm, &out_dir, &stem)?;
                 let mut log = String::new();
-                log.push_str(&format!("$ avr-gcc -mmcu=atmega328p -Os {stem}.s\n"));
-                if !build.size.trim().is_empty() {
-                    log.push_str(build.size.trim_end());
-                    log.push('\n');
-                }
-                log.push_str(&format!("[asm] {}\n", build.asm.display()));
-                log.push_str(&format!("[elf] {}\n", build.elf.display()));
-                log.push_str(&format!("[hex] {}\n", build.hex.display()));
-                log.push_str(&format!("[bin] {}\n", build.bin.display()));
-                if let Some(port) = port {
+                if target.is_avr() {
+                    let build = toolchain::build_avr(&asm, &out_dir, &stem)?;
+                    log.push_str(&format!("$ avr-gcc -mmcu=atmega328p -Os {stem}.s\n"));
+                    if !build.size.trim().is_empty() {
+                        log.push_str(build.size.trim_end());
+                        log.push('\n');
+                    }
                     log.push_str(&format!(
-                        "$ avrdude -p m328p -c arduino -P {port} ({board})\n"
+                        "[elf] {}\n[hex] {}\n[bin] {}\n",
+                        build.elf.display(),
+                        build.hex.display(),
+                        build.bin.display()
                     ));
-                    let out = toolchain::flash_avr(&build.hex, &port, &board)?;
-                    log.push_str(&out);
-                    log.push_str("\n[upload ok]\n");
+                    if let Some(port) = &port {
+                        log.push_str(&format!(
+                            "$ avrdude -p m328p -c arduino -P {port} ({board})\n"
+                        ));
+                        let out = toolchain::flash_avr(&build.hex, port, &board)?;
+                        log.push_str(&out);
+                        log.push_str("\n[upload ok]\n");
+                    }
+                } else if target.is_stm32() {
+                    let build = toolchain::build_stm32(&asm, &out_dir, &stem)?;
+                    log.push_str("$ arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -nostdlib\n");
+                    if !build.size.trim().is_empty() {
+                        log.push_str(build.size.trim_end());
+                        log.push('\n');
+                    }
+                    log.push_str(&format!(
+                        "[elf] {}\n[hex] {}\n[bin] {}\n",
+                        build.elf.display(),
+                        build.hex.display(),
+                        build.bin.display()
+                    ));
+                    if flash {
+                        log.push_str(&format!("$ {} {}\n", transport, build.bin.display()));
+                        let out = toolchain::flash_stm32(&build.bin, &transport)?;
+                        log.push_str(&out);
+                        log.push_str("\n[upload ok]\n");
+                    }
+                } else if target.is_esp() {
+                    if flash {
+                        let port = port.as_deref().unwrap_or("");
+                        log.push_str(&format!(
+                            "$ arduino-cli upload -p {port} ({})\n",
+                            target.as_str()
+                        ));
+                        let out = toolchain::flash_esp(&asm, &out_dir, &stem, target, port)?;
+                        log.push_str(&out);
+                        log.push_str("\n[upload ok]\n");
+                    } else {
+                        let build = toolchain::build_esp(&asm, &out_dir, &stem, target)?;
+                        log.push_str(&format!(
+                            "$ arduino-cli compile --fqbn {}\n",
+                            toolchain::esp_fqbn(target).unwrap_or("")
+                        ));
+                        log.push_str(&format!("[sketch] {}\n", build.ino.display()));
+                        log.push_str(&format!("[output] {}\n", build.output_dir.display()));
+                        for binary in &build.binaries {
+                            log.push_str(&format!("[bin] {}\n", binary.display()));
+                        }
+                    }
                 }
                 Ok(log)
             })();
@@ -1147,9 +1291,13 @@ impl WireStudio {
         self.top_bar(ui);
         self.status_bar(ui);
         self.bottom_panel(ui);
-        self.palette_panel(ui);
-        self.inspector_panel(ui);
-        egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+        if self.workspace == Workspace::Graph {
+            self.palette_panel(ui);
+            self.inspector_panel(ui);
+            egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| self.code_editor_ui(ui));
+        }
 
         self.windows(&ctx);
     }
@@ -1175,6 +1323,15 @@ impl WireStudio {
                     }
                     if ui.button(s("file.save_as")).clicked() {
                         action = Some(Action::SaveAs);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(s("code.open")).clicked() {
+                        action = Some(Action::CodeOpen);
+                        ui.close();
+                    }
+                    if ui.button(s("code.new")).clicked() {
+                        action = Some(Action::CodeNew);
                         ui.close();
                     }
                     ui.separator();
@@ -1242,6 +1399,31 @@ impl WireStudio {
                         action = Some(Action::SetTarget(Target::AvrAtmega328p));
                         ui.close();
                     }
+                    if ui.button(s("mcu.use_stm32")).clicked() {
+                        action = Some(Action::SetTarget(Target::Stm32F411));
+                        ui.close();
+                    }
+                    if ui.button(s("mcu.use_esp32")).clicked() {
+                        action = Some(Action::SetTarget(Target::Esp32));
+                        ui.close();
+                    }
+                    if ui.button(s("mcu.use_esp8266")).clicked() {
+                        action = Some(Action::SetTarget(Target::Esp8266));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(s("mcu.use_c")).clicked() {
+                        action = Some(Action::SetTarget(Target::CLang));
+                        ui.close();
+                    }
+                    if ui.button(s("mcu.use_cpp")).clicked() {
+                        action = Some(Action::SetTarget(Target::Cpp));
+                        ui.close();
+                    }
+                    if ui.button(s("mcu.use_csharp")).clicked() {
+                        action = Some(Action::SetTarget(Target::CSharp));
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(s("toolbar.build_fw")).clicked() {
                         action = Some(Action::BuildFirmware);
@@ -1275,6 +1457,16 @@ impl WireStudio {
                     }
                 });
                 ui.menu_button(s("menu.view"), |ui| {
+                    if ui.button(s("workspace.graph")).clicked() {
+                        self.workspace = Workspace::Graph;
+                        ui.close();
+                    }
+                    if ui.button(s("workspace.code")).clicked() {
+                        self.workspace = Workspace::Code;
+                        self.refresh_generated_tab();
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button(s("edit.fit")).clicked() {
                         action = Some(Action::Fit);
                         ui.close();
@@ -1329,8 +1521,23 @@ impl WireStudio {
                 if ui.button(s("toolbar.run")).clicked() {
                     action = Some(Action::BuildRun);
                 }
+                ui.separator();
+                if ui
+                    .selectable_label(self.workspace == Workspace::Graph, s("workspace.graph"))
+                    .clicked()
+                {
+                    self.workspace = Workspace::Graph;
+                }
+                if ui
+                    .selectable_label(self.workspace == Workspace::Code, s("workspace.code"))
+                    .clicked()
+                {
+                    self.workspace = Workspace::Code;
+                    self.refresh_generated_tab();
+                }
+                ui.separator();
                 if Target::parse(&self.graph.target)
-                    .map(|t| t.is_avr())
+                    .map(|t| t.is_mcu())
                     .unwrap_or(false)
                 {
                     if ui.button(s("toolbar.build_fw")).clicked() {
@@ -1347,8 +1554,8 @@ impl WireStudio {
                     .selected_text(current.clone())
                     .width(145.0)
                     .show_ui(ui, |ui| {
-                        for target in Target::all() {
-                            let mut label = target.as_str().to_string();
+                        for target in Target::all().iter().copied() {
+                            let mut label = target.label().to_string();
                             if !toolchain::can_build(target) {
                                 label.push_str(&format!(" — {}", s("target.not_buildable")));
                             }
@@ -1708,78 +1915,148 @@ impl WireStudio {
             .default_width(420.0)
             .show(ctx, |ui| {
                 let mut changed = false;
-                ui.label(RichText::new(s("board.port")).small().weak());
-                ui.horizontal(|ui| {
-                    let mut port = self.settings.avr_port.clone().unwrap_or_default();
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut port)
-                            .desired_width(210.0)
-                            .hint_text("/dev/cu.usbmodem…"),
-                    );
-                    if resp.changed() {
-                        self.settings.avr_port = if port.trim().is_empty() {
-                            None
-                        } else {
-                            Some(port.trim().to_string())
-                        };
-                        changed = true;
-                    }
-                    if !self.avr_ports.is_empty() {
-                        egui::ComboBox::from_id_salt("avr_port_pick")
-                            .selected_text(s("board.port"))
-                            .width(120.0)
-                            .show_ui(ui, |ui| {
-                                for p in self.avr_ports.clone() {
-                                    if ui.selectable_label(false, &p).clicked() {
-                                        self.settings.avr_port = Some(p);
-                                        changed = true;
-                                    }
-                                }
-                            });
-                    }
-                    if ui.button(s("board.refresh")).clicked() {
-                        self.avr_ports = toolchain::avr_ports();
-                        if self.settings.avr_port.is_none() {
-                            self.settings.avr_port = self.avr_ports.first().cloned();
-                        }
-                        changed = true;
-                    }
-                });
-                if self.avr_ports.is_empty() {
-                    ui.label(RichText::new(s("board.no_ports")).small().weak());
-                }
-
-                ui.add_space(6.0);
-                ui.label(RichText::new(s("board.device")).small().weak());
-                let mut board = self
-                    .settings
-                    .avr_board
-                    .clone()
-                    .unwrap_or_else(|| "uno".to_string());
-                egui::ComboBox::from_id_salt("avr_board_pick")
-                    .selected_text(if board.eq_ignore_ascii_case("nano") {
-                        s("board.nano")
-                    } else {
-                        s("board.uno")
-                    })
-                    .width(210.0)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(board.eq_ignore_ascii_case("uno"), s("board.uno"))
-                            .clicked()
-                        {
-                            board = "uno".to_string();
+                let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
+                if target.is_avr() || target.is_esp() {
+                    ui.label(RichText::new(s("board.port")).small().weak());
+                    ui.horizontal(|ui| {
+                        let mut port = self.settings.avr_port.clone().unwrap_or_default();
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut port)
+                                .desired_width(210.0)
+                                .hint_text("/dev/cu.usbmodem…"),
+                        );
+                        if resp.changed() {
+                            self.settings.avr_port = if port.trim().is_empty() {
+                                None
+                            } else {
+                                Some(port.trim().to_string())
+                            };
                             changed = true;
                         }
-                        if ui
-                            .selectable_label(board.eq_ignore_ascii_case("nano"), s("board.nano"))
-                            .clicked()
-                        {
-                            board = "nano".to_string();
+                        if !self.avr_ports.is_empty() {
+                            egui::ComboBox::from_id_salt("avr_port_pick")
+                                .selected_text(s("board.port"))
+                                .width(120.0)
+                                .show_ui(ui, |ui| {
+                                    for p in self.avr_ports.clone() {
+                                        if ui.selectable_label(false, &p).clicked() {
+                                            self.settings.avr_port = Some(p);
+                                            changed = true;
+                                        }
+                                    }
+                                });
+                        }
+                        if ui.button(s("board.refresh")).clicked() {
+                            self.avr_ports = toolchain::avr_ports();
+                            if self.settings.avr_port.is_none() {
+                                self.settings.avr_port = self.avr_ports.first().cloned();
+                            }
                             changed = true;
                         }
                     });
-                self.settings.avr_board = Some(board);
+                    if self.avr_ports.is_empty() {
+                        ui.label(RichText::new(s("board.no_ports")).small().weak());
+                    }
+                }
+
+                if target.is_avr() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(s("board.device")).small().weak());
+                    let mut board = self
+                        .settings
+                        .avr_board
+                        .clone()
+                        .unwrap_or_else(|| "uno".to_string());
+                    egui::ComboBox::from_id_salt("avr_board_pick")
+                        .selected_text(if board.eq_ignore_ascii_case("nano") {
+                            s("board.nano")
+                        } else {
+                            s("board.uno")
+                        })
+                        .width(210.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(board.eq_ignore_ascii_case("uno"), s("board.uno"))
+                                .clicked()
+                            {
+                                board = "uno".to_string();
+                                changed = true;
+                            }
+                            if ui
+                                .selectable_label(
+                                    board.eq_ignore_ascii_case("nano"),
+                                    s("board.nano"),
+                                )
+                                .clicked()
+                            {
+                                board = "nano".to_string();
+                                changed = true;
+                            }
+                        });
+                    self.settings.avr_board = Some(board);
+                }
+
+                if target.is_stm32() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(s("board.transport")).small().weak());
+                    let mut transport = self
+                        .settings
+                        .stm32_transport
+                        .clone()
+                        .unwrap_or_else(|| "stlink".to_string());
+                    egui::ComboBox::from_id_salt("stm32_transport_pick")
+                        .selected_text(if transport.eq_ignore_ascii_case("dfu") {
+                            s("board.dfu")
+                        } else {
+                            s("board.stlink")
+                        })
+                        .width(210.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    transport.eq_ignore_ascii_case("stlink"),
+                                    s("board.stlink"),
+                                )
+                                .clicked()
+                            {
+                                transport = "stlink".to_string();
+                                changed = true;
+                            }
+                            if ui
+                                .selectable_label(
+                                    transport.eq_ignore_ascii_case("dfu"),
+                                    s("board.dfu"),
+                                )
+                                .clicked()
+                            {
+                                transport = "dfu".to_string();
+                                changed = true;
+                            }
+                        });
+                    self.settings.stm32_transport = Some(transport);
+                }
+
+                if target.is_esp() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(s("board.esp_core")).small().weak());
+                    let installed = toolchain::esp_core_installed(target);
+                    let status = if installed {
+                        s("board.core_installed")
+                    } else {
+                        s("board.core_missing")
+                    };
+                    ui.label(RichText::new(status).small().weak());
+                    if !installed {
+                        ui.label(
+                            RichText::new(format!(
+                                "arduino-cli core install {}",
+                                toolchain::esp_core_name(target).unwrap_or("")
+                            ))
+                            .monospace()
+                            .small(),
+                        );
+                    }
+                }
 
                 ui.add_space(6.0);
                 ui.label(RichText::new(s("board.folder")).small().weak());

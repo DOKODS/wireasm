@@ -1,11 +1,14 @@
-# WireASM 0.2.0 + WireStudio
+# WireASM 0.3.0 + WireStudio
 
 Визуальный язык поверх ассемблера: граф из узлов, как в Blueprint у Unreal,
-компилируется в настоящий `.s` для AArch64, x86-64 или ATmega328P.
+компилируется в настоящий `.s` для AArch64, x86-64, ATmega328P и Cortex-M4,
+в скетч Arduino для ESP32/ESP8266 или в исходник C/C++/C#.
 
 ```
-граф JSON ──► wireasm-core ──► .s ──► clang ──► исполняемый файл
-                  │                └─► avr-gcc ─► .elf/.hex/.bin ─► плата
+граф JSON ──► wireasm-core ──► .s    ──► clang ─────────────► программа
+                  │          ├─► .s    ──► arm-none-eabi-gcc ► .elf/.hex/.bin ► STM32
+                  │          ├─► .ino  ──► arduino-cli ──────► ESP32/ESP8266
+                  │          └─► .c/.cpp/.cs ─► cc / dotnet ─► программа
                   └── проверки, диагностика, статистика
 ```
 
@@ -14,12 +17,15 @@
 
 ## Что умеет
 
-- Пять целей: `aarch64-macos`, `aarch64-linux`, `x86_64-linux`, `x86_64-macos`,
-  `avr-atmega328p` (Arduino Uno/Nano).
+- Одиннадцать целей: `aarch64-macos`, `aarch64-linux`, `x86_64-linux`,
+  `x86_64-macos`, `avr-atmega328p` (Arduino Uno/Nano), `stm32f411`
+  (Cortex-M4), `esp32`, `esp8266`, плюс исходники `c`, `cpp`, `csharp`.
 - 17 встроенных узлов для хоста и 11 узлов микроконтроллера: пины, задержки,
-  UART, АЦП, запись и чтение регистров ATmega328P.
-- Прошивка: сборка `.elf/.hex/.bin` через `avr-gcc` и загрузка через `avrdude`
-  прямо из IDE (F6 — собрать, F7 — прошить).
+  UART, АЦП, запись и чтение регистров.
+- Прошивка: `.elf/.hex/.bin` для AVR и STM32, скетч для ESP; сборка и загрузка
+  из IDE (F6 — собрать, F7 — прошить).
+- Классический редактор кода: вкладки, номера строк, подсветка синтаксиса,
+  открытие/сохранение, сборка и запуск текущей цели.
 - Свои узлы: пины, шаблоны ассемблера для обеих архитектур, свойства.
 - Библиотеки узлов `*.wirelib.json`: импорт и экспорт.
 - Импорт `.s` как заготовки своего узла.
@@ -57,6 +63,20 @@ cargo build --release
 # залить в плату через загрузчик Arduino
 ./target/release/wireasm examples/avr_blink.json --flash /dev/cu.usbmodem14101 --board uno
 
+# Cortex-M4: .elf/.hex/.bin через arm-none-eabi-gcc
+./target/release/wireasm examples/stm32_blink.json --build
+
+# залить в STM32 через st-link или DFU
+./target/release/wireasm examples/stm32_blink.json --flash stlink
+
+# ESP32/ESP8266: скетч Arduino и сборка arduino-cli
+./target/release/wireasm examples/esp32_blink.json --build
+
+# исходник C/C++/C# и запуск на хосте
+./target/release/wireasm examples/c_hello.json --run
+./target/release/wireasm examples/cpp_hello.json --run
+./target/release/wireasm examples/csharp_hello.json --run
+
 # список портов, похожих на Arduino
 ./target/release/wireasm --ports
 ```
@@ -65,19 +85,27 @@ CLI:
 
 ```
 wireasm <graph.json> [options]
-  -o <file.s>        куда писать ассемблер (по умолчанию stdout)
-  --target <t>       переопределить цель из графа
+  -o <file>          куда писать результат (по умолчанию stdout)
+  --target <t>       host asm | avr-atmega328p | stm32f411 | esp32 | esp8266
+                     | c | cpp | csharp
   --check            только валидация
-  --run              собрать через clang и запустить (лимит 5 с)
-  --build            собрать AVR-прошивку (.elf/.hex/.bin) через avr-gcc
+  --run              собрать и запустить программу (asm, C, C++, C#)
+  --build            собрать прошивку/исходник (.elf/.hex/.bin/.exe)
   --out-dir <dir>    папка артефактов для --build (по умолчанию out)
-  --flash <port>     собрать и залить .hex через avrdude
-  --board <name>     плата для --flash: uno (по умолчанию) или nano
+  --flash <value>    порт для AVR/ESP или transport для STM32 (stlink|dfu)
+  --board <name>     плата для AVR --flash: uno (по умолчанию) или nano
   --ports            показать последовательные порты
 ```
 
-Для `--build`/`--flash` нужен AVR-тулчейн: `avr-gcc`, `avr-objcopy`,
-`avr-size` и (для загрузки) `avrdude`. IDE от Arduino кладёт их в
+Для `--build`/`--flash` нужны тулчейны:
+
+- AVR: `avr-gcc`, `avr-objcopy`, `avr-size`, `avrdude`.
+- STM32: `arm-none-eabi-gcc` и `arm-none-eabi-objcopy`, для загрузки
+  `st-flash` (st-link) или `dfu-util` (DFU).
+- ESP: `arduino-cli` и ядро платы (`arduino-cli core install esp32:esp32`).
+- C/C++: системный `cc`/`c++`; C#: .NET SDK (`dotnet`).
+
+IDE от Arduino кладёт AVR-инструменты в
 `~/Library/Arduino15/packages/arduino/tools/` на macOS,
 `~/.arduino15/packages/arduino/tools/` на Linux и
 `%LOCALAPPDATA%\Arduino15\packages\arduino\tools` на Windows; WireASM ищет их
@@ -97,9 +125,12 @@ wireasm <graph.json> [options]
 | Свой узел | Nodes → New custom node… |
 | Компиляция | Ctrl/⌘+Enter |
 | Сборка и запуск | F5 |
-| Собрать AVR-прошивку | F6 или Microcontroller → Build firmware |
+| Собрать прошивку | F6 или Microcontroller → Build firmware |
 | Прошить плату | F7 или Microcontroller → Flash |
 | Порт и плата | Microcontroller → Board settings… |
+| Сменить цель | выпадающий список в шапке или Microcontroller |
+| Граф / код | переключатель в шапке или View → Workspace |
+| Открыть/сохранить код | Code → Open… / Save / Save as… |
 
 Явная компиляция сохранённого графа кладёт рядом файл `<имя>.s`. Автокомпиляция
 после правок обновляет панели, но не пишет файл. Экспорт — File → Export
@@ -111,12 +142,21 @@ assembler…, он же сохраняет папку экспорта в нас
 - Linux: `~/.config/wirestudio/settings.json` (или `$XDG_CONFIG_HOME`)
 - Windows: `%APPDATA%\WireStudio\settings.json`
 
-## Микроконтроллеры
+## Микроконтроллеры и исходники
 
-Цель `avr-atmega328p` собирает граф в прошивку Arduino Uno/Nano. В палитре
-появляется группа «Микроконтроллер»: режим пина, цифровой вход/выход,
-задержки в мс и мкс, UART (инициализация, байт, строка), АЦП A0–A7 и
-запись/чтение регистров ATmega328P по адресу.
+Одна и та же схема узлов работает на всех целях. Меняется только генератор:
+
+| Цель | Что получается | Чем собирается |
+|---|---|---|
+| `avr-atmega328p` | `.s` для ATmega328P, `.elf/.hex/.bin` | `avr-gcc`, `avrdude` |
+| `stm32f411` | Thumb-2 `.s` с векторами и `Reset_Handler` | `arm-none-eabi-gcc -nostdlib` |
+| `esp32`, `esp8266` | скетч `setup()`/`loop()` | `arduino-cli` |
+| `c`, `cpp`, `csharp` | `main()` с `goto`-метками | `cc` / `c++` / `dotnet` |
+
+В палитре появляется группа «Микроконтроллер»: режим пина, цифровой
+вход/выход, задержки в мс и мкс, UART (инициализация, байт, строка), АЦП и
+запись/чтение регистров по адресу. Для STM32 пины задаются портом и номером
+(`C13`), для AVR и ESP — одним номером.
 
 ```
 Entry → Pin Mode (13, out) → Anchor → Digital Write 1 → Delay 500
@@ -124,10 +164,33 @@ Entry → Pin Mode (13, out) → Anchor → Digital Write 1 → Delay 500
                                         └──── Digital Write 0 ←──┘
 ```
 
-Готовые графы: `examples/avr_blink.json`, `examples/avr_uart_hello.json`.
-UART по умолчанию 9600 бод, 8N1; `PrintU64`/`PrintStr` на AVR тоже пишут в
-UART. Значения 16-битные, переменные — в SRAM. `Call`, `Syscall` и свои узлы
-на AVR не поддерживаются: у микроконтроллера нет ОС и хостового ABI.
+Готовые графы: `examples/avr_blink.json`, `examples/avr_uart_hello.json`,
+`examples/stm32_blink.json`, `examples/stm32_uart_hello.json`,
+`examples/esp32_blink.json`, `examples/esp32_uart_hello.json`,
+`examples/c_hello.json`, `examples/cpp_hello.json`,
+`examples/csharp_hello.json`.
+
+AVR работает с 16-битными значениями в `r24:r25`, STM32 и ESP — с 32-битными;
+валидатор предупреждает об усечении. `Call`, `Syscall` и свои узлы на MCU и
+исходниках недоступны: у микроконтроллера нет ОС и хостового ABI. Исключение —
+`Call` в C/C++/C#: это обычный вызов функции из стандартной библиотеки.
+
+STM32 стартует от внутреннего HSI 16 МГц, USART2 выводит на PA2 (TX);
+`PrintU64`/`PrintStr` идут туда же. Прошивка — `out/<имя>.elf`, `.hex`, `.bin`.
+Для загрузки нужен `st-flash` или `dfu-util`; транспорт выбирается в
+Microcontroller → Board settings.
+
+## Редактор кода
+
+Кнопка «Код» в шапке открывает вторую рабочую область — обычный текстовый
+редактор с вкладками, номерами строк и подсветкой под C, C++, C#, Rust,
+ассемблер и JSON. Файл можно открыть (Code → Open…), создать или сохранить;
+сгенерированный при компиляции исходник открывается отдельной вкладкой и
+обновляется после каждой сборки. Оттуда же работают Build (F6) и Run (F5) для
+текущей цели.
+
+Горячие клавиши: Ctrl/⌘+S — сохранить, Ctrl/⌘+Enter — компилировать граф,
+F5 — собрать и запустить, F6 — собрать прошивку.
 
 ## Свои узлы
 
@@ -159,7 +222,7 @@ UART. Значения 16-битные, переменные — в SRAM. `Call`
 }
 ```
 
-Ограничения 0.2.0: до 8 входов `u64`, не больше одного выхода `u64`, не больше
+Ограничения 0.3.0: до 8 входов `u64`, не больше одного выхода `u64`, не больше
 одного `exec`-входа и одного `exec`-выхода; `exec`-выход требует `exec`-входа.
 Шаблонов под AVR у своих узлов пока нет.
 
@@ -211,9 +274,10 @@ releases/              локальные архивы и правила рел�
 
 ## Проверено
 
-На macOS AArch64 (`rustc 1.99.1`, Apple clang, avr-gcc 7.3.0 из Arduino IDE):
+На macOS AArch64 (`rustc 1.99.1`, Apple clang, avr-gcc 7.3.0,
+arm-none-eabi-gcc 16.2.0, arduino-cli 1.6.0):
 
-- `cargo test --workspace` — 16 тестов, все проходят.
+- `cargo test --workspace` — 19 тестов, все проходят.
 - `cargo clippy --all-targets -- -D warnings` — без предупреждений.
 - Пять хост-примеров собираются и запускаются: `Hello from WireASM!`, `55`,
   `55`, `42`, `42`.
@@ -222,22 +286,30 @@ releases/              локальные архивы и правила рел�
 - `examples/avr_blink.json` и `examples/avr_uart_hello.json` собираются
   `avr-gcc -mmcu=atmega328p -Os`; `avr-size`: blink — text 218 / bss 132,
   uart — text 224 / data 26 / bss 132.
+- `examples/stm32_blink.json` — text 244 / bss 260, `stm32_uart_hello` —
+  text 411 / bss 260 (`arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -nostdlib`).
+- `examples/c_hello.json --run` и `examples/cpp_hello.json --run` печатают
+  `Hello from WireASM C!` и `n = 5`.
+- ESP собирается в скетч, но ядра `esp32:esp32`/`esp8266:esp8266` не
+  установлены — `--build` честно останавливается с командой установки.
+- C# требует .NET SDK, STM32-загрузка — `st-flash`/`dfu-util`; на этой машине
+  их нет, поэтому проверены только диагностические сообщения.
 - `wireasm --build` и `--ports` проверены; реальная загрузка в плату не
-  проверялась — под рукой не было Arduino.
+  проверялась — под рукой не было плат.
 
 Linux и Windows бинарники собираются в GitHub Actions; на этой машине они не
 проверялись. macOS-приложение не подписано и не нотаризовано.
 
 ## Релизы
 
-Готовые сборки — [WireASM 0.2.0](https://github.com/DOKODS/wireasm/releases/tag/v0.2.0).
+Готовые сборки — [WireASM 0.3.0](https://github.com/DOKODS/wireasm/releases/tag/v0.3.0).
 
 `.github/workflows/release.yml` по тегу `v*` собирает архивы:
 
-- `wirestudio-0.2.0-aarch64-macos.tar.gz`
-- `wirestudio-0.2.0-x86_64-macos.tar.gz`
-- `wirestudio-0.2.0-x86_64-linux.tar.gz`
-- `wirestudio-0.2.0-x86_64-windows.zip`
+- `wirestudio-0.3.0-aarch64-macos.tar.gz`
+- `wirestudio-0.3.0-x86_64-macos.tar.gz`
+- `wirestudio-0.3.0-x86_64-linux.tar.gz`
+- `wirestudio-0.3.0-x86_64-windows.zip`
 
 В каждом архиве `wirestudio`, `wireasm`, README, лицензия и changelog.
 Локальные архивы кладутся в `releases/`, подробности — в
@@ -250,7 +322,9 @@ MIT, см. [LICENSE](LICENSE).
 ---
 
 **English.** WireASM is a visual assembler language: Blueprint-style graphs
-compile to real AArch64, x86-64 or ATmega328P assembly. WireStudio is a native
-Rust/egui IDE for Linux, Windows and macOS, with MCU nodes, firmware build and
-flash (`avr-gcc`/`avrdude`), custom assembler nodes, node libraries, and
-English/Russian UI. Build with `cargo build --release`; see the commands above.
+compile to real AArch64, x86-64, ATmega328P or Cortex-M4 assembly, to an Arduino
+sketch for ESP32/ESP8266, or to C/C++/C# source. WireStudio is a native Rust/egui
+IDE for Linux, Windows and macOS with a built-in code editor, MCU nodes,
+firmware build and flash for AVR/STM32/ESP, custom assembler nodes, node
+libraries, and English/Russian UI. Build with `cargo build --release`; see the
+commands above.

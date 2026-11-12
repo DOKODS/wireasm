@@ -1,0 +1,20 @@
+{
+  "name": "stm32_uart_hello",
+  "target": "stm32f411",
+  "variables": [],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 80, "y": 240, "props": {} },
+    { "id": "uart", "kind": "McuUartInit", "x": 300, "y": 240, "props": { "baud": "115200" } },
+    { "id": "msg", "kind": "McuUartWriteStr", "x": 540, "y": 240, "props": { "text": "Hello from WireASM STM32!\n" } },
+    { "id": "num", "kind": "PrintU64", "x": 800, "y": 240, "props": {} },
+    { "id": "val", "kind": "Const", "x": 620, "y": 400, "props": { "value": "411" } },
+    { "id": "ret", "kind": "Return", "x": 1020, "y": 240, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "uart", "toPin": "exec" },
+    { "fromNode": "uart", "fromPin": "exec", "toNode": "msg", "toPin": "exec" },
+    { "fromNode": "msg", "fromPin": "exec", "toNode": "num", "toPin": "exec" },
+    { "fromNode": "val", "fromPin": "value", "toNode": "num", "toPin": "value" },
+    { "fromNode": "num", "fromPin": "exec", "toNode": "ret", "toPin": "exec" }
+  ]
+}

@@ -8,6 +8,12 @@ pub enum Target {
     X86_64Linux,
     X86_64Macos,
     AvrAtmega328p,
+    Stm32F411,
+    Esp32,
+    Esp8266,
+    CLang,
+    Cpp,
+    CSharp,
 }
 
 impl Target {
@@ -20,6 +26,14 @@ impl Target {
             "avr-atmega328p" | "avr" | "atmega328p" | "arduino-uno" | "arduino-nano" => {
                 Some(Target::AvrAtmega328p)
             }
+            "stm32f411" | "stm32" | "stm32f4" | "stm32f411ce" | "cortex-m4" | "blackpill" => {
+                Some(Target::Stm32F411)
+            }
+            "esp32" | "esp-wroom-32" | "esp32-wroom" => Some(Target::Esp32),
+            "esp8266" | "nodemcu" | "esp-12" => Some(Target::Esp8266),
+            "c" | "c99" | "c11" => Some(Target::CLang),
+            "cpp" | "c++" | "cxx" | "cplusplus" => Some(Target::Cpp),
+            "csharp" | "c#" | "cs" | "dotnet" | "c-sharp" => Some(Target::CSharp),
             _ => None,
         }
     }
@@ -31,6 +45,43 @@ impl Target {
             Target::X86_64Linux => "x86_64-linux",
             Target::X86_64Macos => "x86_64-macos",
             Target::AvrAtmega328p => "avr-atmega328p",
+            Target::Stm32F411 => "stm32f411",
+            Target::Esp32 => "esp32",
+            Target::Esp8266 => "esp8266",
+            Target::CLang => "c",
+            Target::Cpp => "cpp",
+            Target::CSharp => "csharp",
+        }
+    }
+
+    /// Name shown in the target picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Target::Aarch64Macos => "AArch64 macOS",
+            Target::Aarch64Linux => "AArch64 Linux",
+            Target::X86_64Linux => "x86-64 Linux",
+            Target::X86_64Macos => "x86-64 macOS",
+            Target::AvrAtmega328p => "AVR ATmega328P (Uno/Nano)",
+            Target::Stm32F411 => "STM32F411 (Cortex-M4)",
+            Target::Esp32 => "ESP32 (Arduino core)",
+            Target::Esp8266 => "ESP8266 (Arduino core)",
+            Target::CLang => "C (host)",
+            Target::Cpp => "C++ (host)",
+            Target::CSharp => "C# (host)",
+        }
+    }
+
+    /// Palette / documentation group for the target family.
+    pub fn family(self) -> &'static str {
+        match self {
+            Target::Aarch64Macos
+            | Target::Aarch64Linux
+            | Target::X86_64Linux
+            | Target::X86_64Macos => "host",
+            Target::AvrAtmega328p => "avr",
+            Target::Stm32F411 => "stm32",
+            Target::Esp32 | Target::Esp8266 => "esp",
+            Target::CLang | Target::Cpp | Target::CSharp => "source",
         }
     }
 
@@ -47,19 +98,52 @@ impl Target {
         matches!(self, Target::AvrAtmega328p)
     }
 
-    /// True for microcontroller targets: bare metal, no host operating system.
-    pub fn is_mcu(self) -> bool {
-        self.is_avr()
+    /// STM32F411 (Cortex-M4) bare-metal assembly.
+    pub fn is_stm32(self) -> bool {
+        matches!(self, Target::Stm32F411)
     }
 
-    /// Linux-style `_start` programs. macOS uses `_main`, AVR uses `main`.
+    /// ESP32 / ESP8266: code is generated as an Arduino sketch.
+    pub fn is_esp(self) -> bool {
+        matches!(self, Target::Esp32 | Target::Esp8266)
+    }
+
+    /// Arduino-compatible boards: AVR and ESP.
+    pub fn is_arduino(self) -> bool {
+        self.is_avr() || self.is_esp()
+    }
+
+    /// C, C++ or C# source targets.
+    pub fn is_source(self) -> bool {
+        matches!(self, Target::CLang | Target::Cpp | Target::CSharp)
+    }
+
+    /// Native host assembler targets.
+    pub fn is_host_asm(self) -> bool {
+        matches!(
+            self,
+            Target::Aarch64Macos | Target::Aarch64Linux | Target::X86_64Linux | Target::X86_64Macos
+        )
+    }
+
+    /// Targets that emit assembler (host, AVR, STM32).
+    pub fn is_asm(self) -> bool {
+        self.is_host_asm() || self.is_avr() || self.is_stm32()
+    }
+
+    /// True for microcontroller targets: bare metal or Arduino runtime.
+    pub fn is_mcu(self) -> bool {
+        self.is_avr() || self.is_stm32() || self.is_esp()
+    }
+
+    /// Linux-style `_start` programs. macOS uses `_main`, MCUs use `main`.
     pub fn is_start(self) -> bool {
         matches!(self, Target::Aarch64Linux | Target::X86_64Linux)
     }
 
-    /// Symbol name of the program entry point in the generated assembler.
+    /// Symbol name of the program entry point.
     pub fn entry_symbol(self) -> &'static str {
-        if self.is_avr() {
+        if self.is_mcu() || self.is_source() {
             "main"
         } else if self.is_macos() {
             "_main"
@@ -68,13 +152,30 @@ impl Target {
         }
     }
 
-    pub fn all() -> [Target; 5] {
-        [
+    /// File extension of the generated artifact before linking.
+    pub fn source_extension(self) -> &'static str {
+        match self {
+            Target::CLang => "c",
+            Target::Cpp => "cpp",
+            Target::CSharp => "cs",
+            Target::Esp32 | Target::Esp8266 => "ino",
+            _ => "s",
+        }
+    }
+
+    pub fn all() -> &'static [Target] {
+        &[
             Target::Aarch64Macos,
             Target::Aarch64Linux,
             Target::X86_64Linux,
             Target::X86_64Macos,
             Target::AvrAtmega328p,
+            Target::Stm32F411,
+            Target::Esp32,
+            Target::Esp8266,
+            Target::CLang,
+            Target::Cpp,
+            Target::CSharp,
         ]
     }
 }

@@ -116,7 +116,7 @@ impl WireStudio {
                 .pins(&node.kind)
                 .unwrap_or_else(|| (Vec::new(), Vec::new()));
             let title = self.node_title(&node.kind);
-            let preview = preview_of(node);
+            let preview = preview_of(node, Target::parse(&self.graph.target));
             let rows = inputs.len().max(outputs.len());
 
             let mut width = 24.0 + title.chars().count() as f32 * 7.4;
@@ -445,6 +445,8 @@ impl WireStudio {
                 "reg",
                 if target.is_avr() {
                     "r24"
+                } else if target.is_stm32() {
+                    "r0"
                 } else if target.is_aarch64() {
                     "x0"
                 } else {
@@ -454,8 +456,10 @@ impl WireStudio {
             )),
             "RawAsm" => Some((
                 "text",
-                if target.is_avr() {
+                if target.is_avr() || target.is_stm32() {
                     "nop"
+                } else if target.is_esp() || target.is_source() {
+                    "// raw C code here"
                 } else if target.is_aarch64() {
                     "add {a}, {a}, {b}"
                 } else {
@@ -464,17 +468,73 @@ impl WireStudio {
                 .to_string(),
             )),
             "Comment" => Some(("text", String::new())),
-            "McuPinMode" => Some(("pin", "13".to_string())),
-            "McuDigitalWrite" => Some(("pin", "13".to_string())),
-            "McuDigitalRead" => Some(("pin", "2".to_string())),
+            "McuPinMode" => Some((
+                "pin",
+                if target.is_avr() {
+                    "13"
+                } else if target.is_stm32() {
+                    "5"
+                } else {
+                    "2"
+                }
+                .to_string(),
+            )),
+            "McuDigitalWrite" => Some((
+                "pin",
+                if target.is_avr() {
+                    "13"
+                } else if target.is_stm32() {
+                    "5"
+                } else {
+                    "2"
+                }
+                .to_string(),
+            )),
+            "McuDigitalRead" => Some((
+                "pin",
+                if target.is_avr() {
+                    "2"
+                } else if target.is_stm32() {
+                    "0"
+                } else {
+                    "4"
+                }
+                .to_string(),
+            )),
             "McuUartInit" => Some(("baud", "9600".to_string())),
-            "McuUartWriteStr" => Some(("text", "Hello from AVR!\\n".to_string())),
+            "McuUartWriteStr" => Some((
+                "text",
+                if target.is_avr() {
+                    "Hello from AVR!\\n"
+                } else if target.is_stm32() {
+                    "Hello from STM32!\\n"
+                } else {
+                    "Hello from ESP!\\n"
+                }
+                .to_string(),
+            )),
             "McuAdcRead" => Some(("channel", "0".to_string())),
-            "McuRegisterWrite" | "McuRegisterRead" => Some(("address", "0x25".to_string())),
+            "McuRegisterWrite" | "McuRegisterRead" => Some((
+                "address",
+                if target.is_stm32() {
+                    "0x40023830"
+                } else if target.is_esp() {
+                    "0x3FF44004"
+                } else {
+                    "0x25"
+                }
+                .to_string(),
+            )),
             _ => None,
         };
         if let Some((k, v)) = text {
             props.insert(k.to_string(), v);
+        }
+        if target.is_stm32() && kind.starts_with("McuPin") {
+            props.insert("port".to_string(), "A".to_string());
+        }
+        if target.is_stm32() && matches!(kind, "McuDigitalWrite" | "McuDigitalRead") {
+            props.insert("port".to_string(), "A".to_string());
         }
         props
     }
@@ -509,7 +569,19 @@ impl WireStudio {
     }
 }
 
-fn preview_of(node: &Node) -> Option<String> {
+fn preview_of(node: &Node, target: Option<Target>) -> Option<String> {
+    let stm32 = target.map(|t| t.is_stm32()).unwrap_or(false);
+    let port = |n: &Node| {
+        if stm32 {
+            format!(
+                "P{}{}",
+                n.prop("port").trim().to_ascii_uppercase(),
+                n.prop("pin")
+            )
+        } else {
+            format!("pin {}", n.prop("pin"))
+        }
+    };
     let text = match node.kind.as_str() {
         "Const" => format!("= {}", node.prop("value")),
         "VarGet" | "VarSet" => node.prop("name").to_string(),
@@ -518,8 +590,8 @@ fn preview_of(node: &Node) -> Option<String> {
         "Syscall" => format!("#{}", node.prop("number")),
         "RegGet" | "RegSet" => node.prop("reg").to_string(),
         "PrintStr" | "RawAsm" | "Comment" => node.prop("text").replace('\n', " "),
-        "McuPinMode" => format!("pin {} · {}", node.prop("pin"), node.prop("mode")),
-        "McuDigitalWrite" | "McuDigitalRead" => format!("pin {}", node.prop("pin")),
+        "McuPinMode" => format!("{} · {}", port(node), node.prop("mode")),
+        "McuDigitalWrite" | "McuDigitalRead" => port(node),
         "McuUartInit" => format!("{} baud", node.prop("baud")),
         "McuUartWriteStr" => node.prop("text").replace('\n', " "),
         "McuAdcRead" => format!("A{}", node.prop("channel")),

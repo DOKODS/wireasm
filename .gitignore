@@ -6,6 +6,10 @@
 /out/*.bin
 /out/*.elf
 /out/*.hex
+/out/*.ld
+/out/c_*
+/out/cpp_*
+/out/csharp_*
 /out/wireasm-*
 /dist/
 /releases/*

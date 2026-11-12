@@ -1,0 +1,16 @@
+{
+  "name": "esp32_uart_hello",
+  "target": "esp32",
+  "variables": [],
+  "nodes": [
+    { "id": "entry", "kind": "Entry", "x": 80, "y": 240, "props": {} },
+    { "id": "uart", "kind": "McuUartInit", "x": 300, "y": 240, "props": { "baud": "115200" } },
+    { "id": "msg", "kind": "McuUartWriteStr", "x": 540, "y": 240, "props": { "text": "Hello from WireASM ESP32!\n" } },
+    { "id": "ret", "kind": "Return", "x": 820, "y": 240, "props": {} }
+  ],
+  "edges": [
+    { "fromNode": "entry", "fromPin": "exec", "toNode": "uart", "toPin": "exec" },
+    { "fromNode": "uart", "fromPin": "exec", "toNode": "msg", "toPin": "exec" },
+    { "fromNode": "msg", "fromPin": "exec", "toNode": "ret", "toPin": "exec" }
+  ]
+}

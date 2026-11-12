@@ -22,22 +22,27 @@ Usage:
   wireasm <graph.json> [options]
 
 Options:
-  -o <file.s>        write assembler to a file (default: stdout)
-  --target <t>       aarch64-macos | aarch64-linux | x86_64-linux | x86_64-macos | avr-atmega328p
-  --check            validate only, do not emit assembler
-  --run              assemble for this host with clang and run (5 s limit)
-  --build            build AVR firmware (.elf/.hex/.bin) with avr-gcc
+  -o <file>          write the generated file (default: stdout)
+  --target <t>       host asm | avr-atmega328p | stm32f411 | esp32 | esp8266 | c | cpp | csharp
+  --check            validate only, do not emit anything
+  --run              build and run a host program (asm, C, C++, C#)
+  --build            build firmware/source (.elf/.hex/.bin/.exe) into --out-dir
   --out-dir <dir>    artifact directory for --build (default: out)
-  --flash <port>     build and upload the .hex with avrdude, e.g. /dev/cu.usbmodem14101
-  --board <name>     Arduino board for --flash: uno (default) or nano
-  --ports            list serial ports that look like an Arduino
+  --flash <value>    upload: serial port for AVR/ESP, transport for STM32 (stlink|dfu)
+  --board <name>     Arduino board for AVR --flash: uno (default) or nano
+  --ports            list serial ports that look like a board
   -h, --help         this text
 
 Examples:
   wireasm examples/sum_loop.json -o out/sum_loop.s
   wireasm examples/hello.json --run
+  wireasm examples/hello.json --target c --run
   wireasm examples/avr_blink.json --build
+  wireasm examples/stm32_blink.json --build
+  wireasm examples/esp32_blink.json --build
   wireasm examples/avr_blink.json --flash /dev/cu.usbmodem14101 --board uno
+  wireasm examples/stm32_blink.json --flash stlink
+  wireasm examples/esp32_blink.json --flash /dev/cu.usbserial-0001
 "#,
         wireasm_core::VERSION
     )
@@ -162,41 +167,98 @@ fn run() -> Result<u8, String> {
         return Ok(0);
     }
 
+    let target = Target::parse(&g.target).unwrap();
+    let stem = wireasm_core::artifact_stem(&g);
+
+    if target.is_source() {
+        if flash_port.is_some() {
+            return Err("--flash does not apply to C/C++/C# targets".to_string());
+        }
+        let build = toolchain::build_source(&out.asm, &out_dir, &stem, target)?;
+        eprintln!("wireasm: source {}", build.source.display());
+        eprintln!("wireasm: program {}", build.exe.display());
+        if do_run {
+            let res = toolchain::run(&build.exe, 5)?;
+            print!("{}", res.stdout);
+            eprint!("{}", res.stderr);
+            if res.timed_out {
+                eprintln!("wireasm: program killed after 5 s");
+                return Ok(124);
+            }
+            let code = res.status.unwrap_or(1);
+            eprintln!("wireasm: exit status {code}");
+            return Ok((code & 0xff) as u8);
+        }
+        return Ok(0);
+    }
+
     if do_build || flash_port.is_some() {
-        let t = Target::parse(&g.target).unwrap();
-        if !t.is_avr() {
+        if target.is_avr() {
+            let build = toolchain::build_avr(&out.asm, &out_dir, &stem)?;
+            eprintln!("wireasm: assembled {}", build.asm.display());
+            eprintln!("wireasm: firmware {}", build.elf.display());
+            eprintln!("wireasm: hex      {}", build.hex.display());
+            eprintln!("wireasm: binary   {}", build.bin.display());
+            if !build.size.trim().is_empty() {
+                eprintln!("{}", build.size.trim_end());
+            }
+            if let Some(port) = &flash_port {
+                eprintln!(
+                    "wireasm: uploading {} to {port} ({board})",
+                    build.hex.display()
+                );
+                let log = toolchain::flash_avr(&build.hex, port, &board)?;
+                eprintln!("{log}");
+                eprintln!("wireasm: upload finished");
+            }
+        } else if target.is_stm32() {
+            let build = toolchain::build_stm32(&out.asm, &out_dir, &stem)?;
+            eprintln!("wireasm: assembled {}", build.asm.display());
+            eprintln!("wireasm: firmware {}", build.elf.display());
+            eprintln!("wireasm: hex      {}", build.hex.display());
+            eprintln!("wireasm: binary   {}", build.bin.display());
+            if !build.size.trim().is_empty() {
+                eprintln!("{}", build.size.trim_end());
+            }
+            if let Some(transport) = &flash_port {
+                eprintln!("wireasm: uploading {} via {transport}", build.bin.display());
+                let log = toolchain::flash_stm32(&build.bin, transport)?;
+                eprintln!("{log}");
+                eprintln!("wireasm: upload finished");
+            }
+        } else if target.is_esp() {
+            if do_build && flash_port.is_none() {
+                let build = toolchain::build_esp(&out.asm, &out_dir, &stem, target)?;
+                eprintln!("wireasm: sketch {}", build.ino.display());
+                eprintln!("wireasm: output {}", build.output_dir.display());
+                for p in build.binaries {
+                    eprintln!("wireasm: binary {}", p.display());
+                }
+            } else if let Some(port) = &flash_port {
+                eprintln!("wireasm: uploading to {port} ({})", target.label());
+                let log = toolchain::flash_esp(&out.asm, &out_dir, &stem, target, port)?;
+                eprintln!("{log}");
+                eprintln!("wireasm: upload finished");
+            }
+        } else {
             return Err(format!(
-                "--build/--flash only work for AVR targets, this graph targets {}",
-                t.as_str()
+                "--build/--flash do not apply to target {} (use --run or -o)",
+                target.as_str()
             ));
-        }
-        let stem = wireasm_core::artifact_stem(&g);
-        let build = toolchain::build_avr(&out.asm, &out_dir, &stem)?;
-        eprintln!("wireasm: assembled {}", build.asm.display());
-        eprintln!("wireasm: firmware {}", build.elf.display());
-        eprintln!("wireasm: hex      {}", build.hex.display());
-        eprintln!("wireasm: binary   {}", build.bin.display());
-        if !build.size.trim().is_empty() {
-            eprintln!("{}", build.size.trim_end());
-        }
-        if let Some(port) = &flash_port {
-            eprintln!(
-                "wireasm: uploading {} to {port} ({board})",
-                build.hex.display()
-            );
-            let log = toolchain::flash_avr(&build.hex, port, &board)?;
-            eprintln!("{log}");
-            eprintln!("wireasm: upload finished");
         }
         return Ok(0);
     }
 
     if let Some(path) = &output {
+        let mut path = path.clone();
+        if path.extension().is_none() {
+            path.set_extension(target.source_extension());
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
         }
-        std::fs::write(path, &out.asm)
+        std::fs::write(&path, &out.asm)
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         eprintln!(
             "wireasm: wrote {} ({} lines, target {})",
@@ -210,6 +272,12 @@ fn run() -> Result<u8, String> {
 
     if do_run {
         let t = Target::parse(&g.target).unwrap();
+        if !t.is_host_asm() {
+            return Err(format!(
+                "--run builds host assembler targets only; {} needs --build or --flash",
+                t.as_str()
+            ));
+        }
         if !toolchain::can_build(t) {
             return Err(format!(
                 "target {} cannot run on this host ({:?}); use -o file.s",

@@ -21,6 +21,14 @@ pub fn host_target() -> Option<Target> {
 pub fn can_build(t: Target) -> bool {
     if t.is_avr() {
         avr_tools().is_some()
+    } else if t.is_stm32() {
+        stm32_tools().is_some()
+    } else if t.is_esp() {
+        arduino_cli().is_some() && esp_core_installed(t)
+    } else if t == Target::CLang || t == Target::Cpp {
+        host_c_compiler().is_some() || host_cpp_compiler().is_some()
+    } else if t == Target::CSharp {
+        which("dotnet").is_some()
     } else {
         host_target() == Some(t)
     }
@@ -386,4 +394,407 @@ pub fn flash_avr(hex: &Path, port: &str, board: &str) -> Result<String, String> 
         return Err(format!("avrdude failed:\n{log}"));
     }
     Ok(log)
+}
+
+// ---------------------------------------------------------------- STM32 tools
+
+/// Tools found for the STM32 target: the ARM GNU toolchain.
+#[derive(Clone, Debug)]
+pub struct Stm32Tools {
+    pub gcc: PathBuf,
+    pub objcopy: PathBuf,
+    pub size: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Stm32Build {
+    pub asm: PathBuf,
+    pub elf: PathBuf,
+    pub hex: PathBuf,
+    pub bin: PathBuf,
+    pub size: String,
+}
+
+fn detect_stm32_tools() -> Option<Stm32Tools> {
+    let gcc = which("arm-none-eabi-gcc")?;
+    let bin_dir = gcc.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let objcopy =
+        which("arm-none-eabi-objcopy").or_else(|| tool_file(&bin_dir, "arm-none-eabi-objcopy"))?;
+    let size = which("arm-none-eabi-size").or_else(|| tool_file(&bin_dir, "arm-none-eabi-size"));
+    Some(Stm32Tools { gcc, objcopy, size })
+}
+
+pub fn stm32_tools() -> Option<Stm32Tools> {
+    static CACHE: OnceLock<Option<Stm32Tools>> = OnceLock::new();
+    CACHE.get_or_init(detect_stm32_tools).clone()
+}
+
+/// Linker script for STM32F411CE: 512 KiB flash, 128 KiB RAM.
+pub const STM32F411_LD: &str = r#"/* WireASM generated linker script: STM32F411CE */
+MEMORY
+{
+  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 512K
+  RAM (rwx)  : ORIGIN = 0x20000000, LENGTH = 128K
+}
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+SECTIONS
+{
+  .text : {
+    KEEP(*(.isr_vector))
+    *(.text*)
+    *(.rodata*)
+  } > FLASH
+  .data : { *(.data*) } > RAM AT > FLASH
+  .bss : { *(.bss*) *(COMMON) } > RAM
+}
+"#;
+
+pub fn build_stm32(asm: &str, out_dir: &Path, stem: &str) -> Result<Stm32Build, String> {
+    let tools = stm32_tools().ok_or_else(|| {
+        "ARM toolchain not found: install arm-none-eabi-gcc (brew install arm-none-eabi-gcc)"
+            .to_string()
+    })?;
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    let asm_path = out_dir.join(format!("{stem}.s"));
+    let ld_path = out_dir.join(format!("{stem}.ld"));
+    let elf_path = out_dir.join(format!("{stem}.elf"));
+    let hex_path = out_dir.join(format!("{stem}.hex"));
+    let bin_path = out_dir.join(format!("{stem}.bin"));
+    std::fs::write(&asm_path, asm).map_err(|e| format!("write {}: {e}", asm_path.display()))?;
+    std::fs::write(&ld_path, STM32F411_LD)
+        .map_err(|e| format!("write {}: {e}", ld_path.display()))?;
+
+    let out = Command::new(&tools.gcc)
+        .arg("-mcpu=cortex-m4")
+        .arg("-mthumb")
+        .arg("-nostdlib")
+        .arg("-T")
+        .arg(&ld_path)
+        .arg("-o")
+        .arg(&elf_path)
+        .arg(&asm_path)
+        .output()
+        .map_err(|e| format!("failed to start arm-none-eabi-gcc: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "arm-none-eabi-gcc failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    for (format, path) in [("ihex", &hex_path), ("binary", &bin_path)] {
+        let out = Command::new(&tools.objcopy)
+            .arg("-O")
+            .arg(format)
+            .arg(&elf_path)
+            .arg(path)
+            .output()
+            .map_err(|e| format!("failed to start arm-none-eabi-objcopy: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "arm-none-eabi-objcopy failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+
+    let mut size = String::new();
+    if let Some(size_tool) = &tools.size {
+        if let Ok(out) = Command::new(size_tool).arg(&elf_path).output() {
+            size = String::from_utf8_lossy(&out.stdout).to_string();
+        }
+    }
+
+    Ok(Stm32Build {
+        asm: asm_path,
+        elf: elf_path,
+        hex: hex_path,
+        bin: bin_path,
+        size,
+    })
+}
+
+/// Upload a `.bin` to STM32 flash. `transport` is `stlink` (default, st-flash)
+/// or `dfu` (dfu-util). ST-Link is the usual option on Black Pill boards.
+pub fn flash_stm32(bin: &Path, transport: &str) -> Result<String, String> {
+    let dfu = transport.eq_ignore_ascii_case("dfu");
+    if dfu {
+        let tool = which("dfu-util").ok_or_else(|| {
+            "dfu-util not found: install dfu-util or use --flash stlink".to_string()
+        })?;
+        let out = Command::new(tool)
+            .arg("-a")
+            .arg("0")
+            .arg("-s")
+            .arg("0x08000000:leave")
+            .arg("-D")
+            .arg(bin)
+            .output()
+            .map_err(|e| format!("failed to start dfu-util: {e}"))?;
+        let mut log = String::from_utf8_lossy(&out.stdout).to_string();
+        log.push_str(&String::from_utf8_lossy(&out.stderr));
+        if !out.status.success() {
+            return Err(format!("dfu-util failed:\n{log}"));
+        }
+        return Ok(log);
+    }
+
+    let tool = which("st-flash")
+        .ok_or_else(|| "st-flash not found: install stlink tools or use --flash dfu".to_string())?;
+    let out = Command::new(tool)
+        .arg("write")
+        .arg(bin)
+        .arg("0x08000000")
+        .output()
+        .map_err(|e| format!("failed to start st-flash: {e}"))?;
+    let mut log = String::from_utf8_lossy(&out.stdout).to_string();
+    log.push_str(&String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() {
+        return Err(format!("st-flash failed:\n{log}"));
+    }
+    Ok(log)
+}
+
+// ------------------------------------------------------------ Arduino CLI / ESP
+
+pub fn arduino_cli() -> Option<PathBuf> {
+    which("arduino-cli")
+}
+
+/// Fully qualified board name used by `arduino-cli` for each ESP target.
+pub fn esp_fqbn(t: Target) -> Option<&'static str> {
+    match t {
+        Target::Esp32 => Some("esp32:esp32:esp32"),
+        Target::Esp8266 => Some("esp8266:esp8266:nodemcuv2"),
+        _ => None,
+    }
+}
+
+pub fn esp_core_name(t: Target) -> Option<&'static str> {
+    match t {
+        Target::Esp32 => Some("esp32:esp32"),
+        Target::Esp8266 => Some("esp8266:esp8266"),
+        _ => None,
+    }
+}
+
+/// True when the matching ESP board package is installed in arduino-cli.
+pub fn esp_core_installed(t: Target) -> bool {
+    let Some(core) = esp_core_name(t) else {
+        return false;
+    };
+    let Some(cli) = arduino_cli() else {
+        return false;
+    };
+    match Command::new(cli).arg("core").arg("list").output() {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).contains(core),
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EspBuild {
+    pub sketch_dir: PathBuf,
+    pub ino: PathBuf,
+    pub output_dir: PathBuf,
+    pub binaries: Vec<PathBuf>,
+}
+
+pub fn build_esp(source: &str, out_dir: &Path, stem: &str, t: Target) -> Result<EspBuild, String> {
+    let cli = arduino_cli().ok_or_else(|| {
+        "arduino-cli not found: install it (brew install arduino-cli)".to_string()
+    })?;
+    let fqbn = esp_fqbn(t).ok_or_else(|| format!("{} is not an ESP target", t.as_str()))?;
+    if !esp_core_installed(t) {
+        return Err(format!(
+            "{} core is not installed: run 'arduino-cli core install {}'",
+            t.label(),
+            esp_core_name(t).unwrap_or("")
+        ));
+    }
+    let sketch_dir = out_dir.join(format!("{stem}_{}", t.as_str()));
+    std::fs::create_dir_all(&sketch_dir)
+        .map_err(|e| format!("cannot create {}: {e}", sketch_dir.display()))?;
+    let ino = sketch_dir.join(format!("{stem}.ino"));
+    std::fs::write(&ino, source).map_err(|e| format!("write {}: {e}", ino.display()))?;
+    let output_dir = out_dir.join(format!("{stem}_{}_build", t.as_str()));
+
+    let out = Command::new(&cli)
+        .arg("compile")
+        .arg("--fqbn")
+        .arg(fqbn)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg(&sketch_dir)
+        .output()
+        .map_err(|e| format!("failed to start arduino-cli: {e}"))?;
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        return Err(format!("arduino-cli compile failed:\n{log}"));
+    }
+
+    let mut binaries = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&output_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("bin") | Some("elf") | Some("hex")
+            ) {
+                binaries.push(p);
+            }
+        }
+    }
+    binaries.sort();
+    Ok(EspBuild {
+        sketch_dir,
+        ino,
+        output_dir,
+        binaries,
+    })
+}
+
+/// Build and upload an ESP sketch over the serial port.
+pub fn flash_esp(
+    source: &str,
+    out_dir: &Path,
+    stem: &str,
+    t: Target,
+    port: &str,
+) -> Result<String, String> {
+    let build = build_esp(source, out_dir, stem, t)?;
+    let cli = arduino_cli().ok_or_else(|| "arduino-cli not found".to_string())?;
+    let fqbn = esp_fqbn(t).ok_or_else(|| "not an ESP target".to_string())?;
+    let out = Command::new(cli)
+        .arg("upload")
+        .arg("-p")
+        .arg(port)
+        .arg("--fqbn")
+        .arg(fqbn)
+        .arg("--input-dir")
+        .arg(&build.output_dir)
+        .arg(&build.sketch_dir)
+        .output()
+        .map_err(|e| format!("failed to start arduino-cli: {e}"))?;
+    let mut log = String::from_utf8_lossy(&out.stdout).to_string();
+    log.push_str(&String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() {
+        return Err(format!("arduino-cli upload failed:\n{log}"));
+    }
+    Ok(log)
+}
+
+// -------------------------------------------------------- host C / C++ / C# tools
+
+#[derive(Clone, Debug)]
+pub struct HostBuild {
+    pub source: PathBuf,
+    pub exe: PathBuf,
+}
+
+fn host_c_compiler() -> Option<PathBuf> {
+    which("cc")
+        .or_else(|| which("gcc"))
+        .or_else(|| which("clang"))
+}
+
+fn host_cpp_compiler() -> Option<PathBuf> {
+    which("c++")
+        .or_else(|| which("g++"))
+        .or_else(|| which("clang++"))
+}
+
+pub fn build_source(
+    source: &str,
+    out_dir: &Path,
+    stem: &str,
+    t: Target,
+) -> Result<HostBuild, String> {
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    let src_path = out_dir.join(format!("{stem}.{}", t.source_extension()));
+    std::fs::write(&src_path, source).map_err(|e| format!("write {}: {e}", src_path.display()))?;
+
+    if t == Target::CSharp {
+        return build_csharp(out_dir, stem, &src_path);
+    }
+
+    let exe_path = out_dir.join(format!("{stem}{}", if cfg!(windows) { ".exe" } else { "" }));
+    let cc = if t == Target::Cpp {
+        host_cpp_compiler()
+    } else {
+        host_c_compiler()
+    }
+    .ok_or_else(|| "host C/C++ compiler not found in PATH".to_string())?;
+
+    let mut cmd = Command::new(cc);
+    if t == Target::Cpp {
+        cmd.arg("-std=c++17");
+    } else {
+        cmd.arg("-std=c11");
+    }
+    cmd.arg("-O2").arg("-o").arg(&exe_path).arg(&src_path);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("failed to start compiler: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "compiler failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(HostBuild {
+        source: src_path,
+        exe: exe_path,
+    })
+}
+
+fn build_csharp(out_dir: &Path, stem: &str, src_path: &Path) -> Result<HostBuild, String> {
+    let dotnet = which("dotnet")
+        .ok_or_else(|| "dotnet not found: install the .NET SDK to build C# targets".to_string())?;
+    let project_dir = out_dir.join(format!("{stem}_cs"));
+    std::fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("cannot create {}: {e}", project_dir.display()))?;
+    let csproj = project_dir.join(format!("{stem}.csproj"));
+    std::fs::write(
+        &csproj,
+        format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net8.0</TargetFramework>\n    <Nullable>disable</Nullable>\n    <ImplicitUsings>disable</ImplicitUsings>\n    <AssemblyName>{stem}</AssemblyName>\n    <RootNamespace>{stem}</RootNamespace>\n  </PropertyGroup>\n</Project>\n"
+        ),
+    )
+    .map_err(|e| format!("write {}: {e}", csproj.display()))?;
+    let program = project_dir.join("Program.cs");
+    std::fs::copy(src_path, &program).map_err(|e| format!("copy {}: {e}", program.display()))?;
+
+    let bin_dir = out_dir.join(format!("{stem}_cs_bin"));
+    let out = Command::new(dotnet)
+        .arg("build")
+        .arg(&csproj)
+        .arg("-c")
+        .arg("Release")
+        .arg("-o")
+        .arg(&bin_dir)
+        .arg("--nologo")
+        .output()
+        .map_err(|e| format!("failed to start dotnet: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "dotnet build failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let exe = bin_dir.join(format!("{stem}{}", if cfg!(windows) { ".exe" } else { "" }));
+    if !exe.is_file() {
+        return Err(format!("dotnet did not produce {}", exe.display()));
+    }
+    Ok(HostBuild {
+        source: program,
+        exe,
+    })
 }
