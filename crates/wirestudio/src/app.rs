@@ -11,9 +11,11 @@ use wireasm_core::model::{
 };
 use wireasm_core::{artifact_stem, compile, toolchain, CompileOutput, Severity};
 
+use crate::circuit::CircuitDoc;
 use crate::editor::{CodeEditor, Syntax, Workspace};
 use crate::i18n::{t, Lang};
 use crate::settings::Settings;
+use wireasm_sim::schematic::Schematic;
 
 pub const EXAMPLES: &[(&str, &str, &str)] = &[
     (
@@ -166,6 +168,16 @@ pub enum After {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
     Unsaved(After),
+    UnsavedCircuit(AfterCircuit),
+}
+
+/// What to do once the circuit is saved or discarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterCircuit {
+    New,
+    Open,
+    Example(usize),
+    Quit,
 }
 
 pub struct CustomEditor {
@@ -237,6 +249,14 @@ pub enum Action {
     SetTarget(Target),
     CodeOpen,
     CodeNew,
+    CircuitNew,
+    CircuitOpen,
+    CircuitSave,
+    CircuitSaveAs,
+    CircuitExample(usize),
+    CircuitRun,
+    CircuitFit,
+    CircuitExport,
 }
 
 pub struct WireStudio {
@@ -266,6 +286,7 @@ pub struct WireStudio {
     pub avr_ports: Vec<String>,
     pub workspace: Workspace,
     pub editor: CodeEditor,
+    pub circuit: CircuitDoc,
     pub allow_close: bool,
     pub job: Option<Job>,
     pub undo: Vec<String>,
@@ -313,6 +334,7 @@ impl WireStudio {
             avr_ports: Vec::new(),
             workspace: Workspace::Graph,
             editor: CodeEditor::new(),
+            circuit: CircuitDoc::default(),
             allow_close: false,
             job: None,
             undo: Vec::new(),
@@ -325,6 +347,11 @@ impl WireStudio {
         app.status = app.tr("status.ready").to_string();
         if let Some(path) = initial {
             app.open_path(&path);
+        }
+        // Headless check: `WIRESTUDIO_AUTOSIM=1 wirestudio circuit.json` runs
+        // the analysis at startup, which is handy in scripts and CI.
+        if std::env::var("WIRESTUDIO_AUTOSIM").is_ok() {
+            app.run_circuit();
         }
         app
     }
@@ -506,6 +533,13 @@ impl WireStudio {
                 return;
             }
         };
+        // A schematic file has its own marker; everything else is a graph.
+        if let Ok(value) = Json::parse(&src) {
+            if value.get("kind").and_then(|x| x.as_str()) == Some("wireasm-circuit") {
+                self.circuit_open_path(path);
+                return;
+            }
+        }
         let parsed = Json::parse(&src)
             .map_err(|e| format!("JSON: {e}"))
             .and_then(|v| Graph::from_json_value(&v));
@@ -545,7 +579,142 @@ impl WireStudio {
         }
     }
 
-    fn load_example(&mut self, idx: usize) {
+    /// Open a schematic file into the circuit workspace.
+    pub fn circuit_open_path(&mut self, path: &Path) {
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.error(format!("{}: {e}", path.display()));
+                return;
+            }
+        };
+        let parsed = Json::parse(&src)
+            .map_err(|e| format!("JSON: {e}"))
+            .and_then(|v| Schematic::from_json_value(&v));
+        match parsed {
+            Ok(schematic) => {
+                self.circuit.model = schematic;
+                self.circuit.path = Some(path.to_path_buf());
+                self.circuit.dirty = false;
+                self.circuit.result = None;
+                self.workspace = Workspace::Circuit;
+                self.remember_dir(path);
+                self.status = self
+                    .tr("status.circuit_opened")
+                    .replace("{}", &path.display().to_string());
+                self.console.push(self.status.clone());
+            }
+            Err(e) => self.error(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Write the schematic to a file.
+    pub fn circuit_save(&mut self, save_as: bool) -> bool {
+        let mut path = self.circuit.path.clone();
+        if save_as || path.is_none() {
+            let name = format!("{}.circuit.json", self.circuit.model.name);
+            let filter = self.tr("dialog.circuit");
+            match self.pick_save(self.tr("circuit.save_as"), &[(filter, &["json"])], &name) {
+                Some(p) => path = Some(p),
+                None => {
+                    self.status = self.tr("status.cancelled").to_string();
+                    return false;
+                }
+            }
+        }
+        let Some(path) = path else { return false };
+        let text = self.circuit.model.to_json_value().stringify_pretty();
+        if let Err(e) = std::fs::write(&path, text) {
+            self.error(format!("{}: {e}", path.display()));
+            return false;
+        }
+        self.remember_dir(&path);
+        self.circuit.path = Some(path.clone());
+        self.circuit.dirty = false;
+        self.status = self
+            .tr("status.circuit_saved")
+            .replace("{}", &path.display().to_string());
+        self.console.push(self.status.clone());
+        true
+    }
+
+    /// Ask before throwing away an unsaved schematic.
+    pub fn circuit_new(&mut self) {
+        if self.circuit.dirty {
+            self.confirm = Some(Confirm::UnsavedCircuit(AfterCircuit::New));
+        } else {
+            self.circuit.model = Schematic::empty();
+            self.circuit.result = None;
+            self.circuit.dirty = false;
+            self.workspace = Workspace::Circuit;
+            self.status = self.tr("status.circuit_new").to_string();
+        }
+    }
+
+    /// Show the open dialog for schematic files.
+    pub fn circuit_open(&mut self) {
+        let title = self.tr("circuit.open").to_string();
+        let filter = self.tr("dialog.circuit");
+        if let Some(path) = self.pick_open(&title, &[(filter, &["json"])]) {
+            self.circuit_open_path(&path);
+        }
+    }
+
+    /// Ask before replacing a schematic that has unsaved changes.
+    pub fn circuit_ask_or(&mut self, after: AfterCircuit) {
+        if self.circuit.dirty {
+            self.confirm = Some(Confirm::UnsavedCircuit(after));
+        } else {
+            self.after_circuit_unsaved(after, None);
+        }
+    }
+
+    /// Load one of the built-in example schematics.
+    pub fn circuit_load_example(&mut self, idx: usize) {
+        let examples = Schematic::examples();
+        let Some((_, schematic)) = examples.get(idx) else {
+            return;
+        };
+        let name = schematic.name.clone();
+        self.circuit.model = schematic.clone();
+        self.circuit.path = None;
+        self.circuit.dirty = false;
+        self.circuit.result = None;
+        self.workspace = Workspace::Circuit;
+        self.status = self.tr("status.circuit_example").replace("{}", &name);
+    }
+
+    /// Export the current schematic as a simulation netlist.
+    pub fn circuit_export_netlist(&mut self) {
+        let circuit = match self.circuit.model.netlist() {
+            Ok(c) => c,
+            Err(e) => {
+                self.error(e);
+                return;
+            }
+        };
+        let filter = self.tr("dialog.netlist");
+        let name = format!("{}.netlist.json", self.circuit.model.name);
+        let Some(path) = self.pick_save(
+            self.tr("circuit.export_netlist"),
+            &[(filter, &["json"])],
+            &name,
+        ) else {
+            self.status = self.tr("status.cancelled").to_string();
+            return;
+        };
+        let text = circuit.to_json_value().stringify_pretty();
+        if let Err(e) = std::fs::write(&path, text) {
+            self.error(format!("{}: {e}", path.display()));
+            return;
+        }
+        self.remember_dir(&path);
+        self.status = self
+            .tr("status.circuit_exported")
+            .replace("{}", &path.display().to_string());
+    }
+
+    pub fn load_example(&mut self, idx: usize) {
         let Some((_, _, src)) = EXAMPLES.get(idx) else {
             return;
         };
@@ -798,20 +967,28 @@ impl WireStudio {
         match action {
             Action::New => self.ask_or(After::New),
             Action::Open => self.ask_or(After::Open),
-            Action::Save => {
-                if self.workspace == Workspace::Code {
+            Action::Save => match self.workspace {
+                Workspace::Code => {
                     self.code_save(false);
-                } else {
+                }
+                Workspace::Circuit => {
+                    self.circuit_save(false);
+                }
+                Workspace::Graph => {
                     self.save(false);
                 }
-            }
-            Action::SaveAs => {
-                if self.workspace == Workspace::Code {
+            },
+            Action::SaveAs => match self.workspace {
+                Workspace::Code => {
                     self.code_save(true);
-                } else {
+                }
+                Workspace::Circuit => {
+                    self.circuit_save(true);
+                }
+                Workspace::Graph => {
                     self.save(true);
                 }
-            }
+            },
             Action::CodeOpen => {
                 self.workspace = Workspace::Code;
                 self.code_open();
@@ -820,6 +997,18 @@ impl WireStudio {
                 let target = Target::parse(&self.graph.target).unwrap_or(Target::Aarch64Macos);
                 self.code_new(Syntax::from_target(target));
             }
+            Action::CircuitNew => self.circuit_new(),
+            Action::CircuitOpen => self.circuit_ask_or(AfterCircuit::Open),
+            Action::CircuitSave => {
+                self.circuit_save(false);
+            }
+            Action::CircuitSaveAs => {
+                self.circuit_save(true);
+            }
+            Action::CircuitExample(idx) => self.circuit_ask_or(AfterCircuit::Example(idx)),
+            Action::CircuitRun => self.run_circuit(),
+            Action::CircuitFit => self.circuit.fit_requested = true,
+            Action::CircuitExport => self.circuit_export_netlist(),
             Action::ExportAsm => self.export_asm(),
             Action::ImportLibrary => self.import_library(),
             Action::ExportLibrary => self.export_library(),
@@ -835,7 +1024,13 @@ impl WireStudio {
             }
             Action::Undo => self.undo_action(),
             Action::Redo => self.redo_action(),
-            Action::Delete => self.delete_selected(),
+            Action::Delete => {
+                if self.workspace == Workspace::Circuit {
+                    self.circuit_delete_selected();
+                } else {
+                    self.delete_selected();
+                }
+            }
             Action::Fit => self.fit_requested = true,
             Action::ZoomIn => {
                 let c = self.last_canvas.center();
@@ -1207,24 +1402,33 @@ impl WireStudio {
     }
 
     fn handle_close(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.allow_close {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.allow_close {
+            return;
+        }
+        if self.circuit.dirty {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Confirm::UnsavedCircuit(AfterCircuit::Quit));
+        } else if self.dirty {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Unsaved(After::Quit));
         }
     }
 
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let name = self
-            .path
+        let path = match self.workspace {
+            Workspace::Circuit => self.circuit.path.clone(),
+            _ => self.path.clone(),
+        };
+        let name = path
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| self.tr("toolbar.untitled").to_string());
-        let title = format!(
-            "{}{} — WireStudio",
-            name,
-            if self.dirty { " *" } else { "" }
-        );
+        let dirty = match self.workspace {
+            Workspace::Circuit => self.circuit.dirty,
+            _ => self.dirty,
+        };
+        let title = format!("{}{} — WireStudio", name, if dirty { " *" } else { "" });
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -1290,13 +1494,20 @@ impl WireStudio {
 
         self.top_bar(ui);
         self.status_bar(ui);
-        self.bottom_panel(ui);
-        if self.workspace == Workspace::Graph {
-            self.palette_panel(ui);
-            self.inspector_panel(ui);
-            egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
-        } else {
-            egui::CentralPanel::default().show(ui, |ui| self.code_editor_ui(ui));
+        match self.workspace {
+            Workspace::Graph => {
+                self.bottom_panel(ui);
+                self.palette_panel(ui);
+                self.inspector_panel(ui);
+                egui::CentralPanel::default().show(ui, |ui| self.canvas(ui));
+            }
+            Workspace::Code => {
+                self.bottom_panel(ui);
+                egui::CentralPanel::default().show(ui, |ui| self.code_editor_ui(ui));
+            }
+            Workspace::Circuit => {
+                self.circuit_ui(ui);
+            }
         }
 
         self.windows(&ctx);
@@ -1332,6 +1543,35 @@ impl WireStudio {
                     }
                     if ui.button(s("code.new")).clicked() {
                         action = Some(Action::CodeNew);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(s("circuit.new")).clicked() {
+                        action = Some(Action::CircuitNew);
+                        ui.close();
+                    }
+                    if ui.button(s("circuit.open")).clicked() {
+                        action = Some(Action::CircuitOpen);
+                        ui.close();
+                    }
+                    if ui.button(s("circuit.save")).clicked() {
+                        action = Some(Action::CircuitSave);
+                        ui.close();
+                    }
+                    if ui.button(s("circuit.save_as")).clicked() {
+                        action = Some(Action::CircuitSaveAs);
+                        ui.close();
+                    }
+                    ui.menu_button(s("circuit.examples"), |ui| {
+                        for (i, (key, _)) in Schematic::examples().iter().enumerate() {
+                            if ui.button(s(key)).clicked() {
+                                action = Some(Action::CircuitExample(i));
+                                ui.close();
+                            }
+                        }
+                    });
+                    if ui.button(s("circuit.export_netlist")).clicked() {
+                        action = Some(Action::CircuitExport);
                         ui.close();
                     }
                     ui.separator();
@@ -1466,6 +1706,10 @@ impl WireStudio {
                         self.refresh_generated_tab();
                         ui.close();
                     }
+                    if ui.button(s("workspace.circuit")).clicked() {
+                        self.workspace = Workspace::Circuit;
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(s("edit.fit")).clicked() {
                         action = Some(Action::Fit);
@@ -1535,6 +1779,20 @@ impl WireStudio {
                     self.workspace = Workspace::Code;
                     self.refresh_generated_tab();
                 }
+                if ui
+                    .selectable_label(self.workspace == Workspace::Circuit, s("workspace.circuit"))
+                    .clicked()
+                {
+                    self.workspace = Workspace::Circuit;
+                }
+                if self.workspace == Workspace::Circuit {
+                    if ui.button(s("circuit.run")).clicked() {
+                        action = Some(Action::CircuitRun);
+                    }
+                    if ui.button(s("circuit.fit")).clicked() {
+                        action = Some(Action::CircuitFit);
+                    }
+                }
                 ui.separator();
                 if Target::parse(&self.graph.target)
                     .map(|t| t.is_mcu())
@@ -1581,13 +1839,16 @@ impl WireStudio {
                     );
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let mut name = self
-                        .path
+                    let (path, dirty) = match self.workspace {
+                        Workspace::Circuit => (self.circuit.path.clone(), self.circuit.dirty),
+                        _ => (self.path.clone(), self.dirty),
+                    };
+                    let mut name = path
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| s("toolbar.untitled").to_string());
-                    if self.dirty {
+                    if dirty {
                         name.push_str(" *");
                     }
                     ui.label(RichText::new(name).monospace());
@@ -2103,9 +2364,14 @@ impl WireStudio {
     }
 
     fn confirm_window(&mut self, ctx: &egui::Context) {
-        let Some(Confirm::Unsaved(after)) = self.confirm else {
-            return;
-        };
+        match self.confirm {
+            Some(Confirm::Unsaved(after)) => self.graph_confirm_window(ctx, after),
+            Some(Confirm::UnsavedCircuit(after)) => self.circuit_confirm_window(ctx, after),
+            None => {}
+        }
+    }
+
+    fn graph_confirm_window(&mut self, ctx: &egui::Context, after: After) {
         let lang = self.lang;
         let s = |k: &str| t(lang, k);
         let mut choice: Option<u8> = None;
@@ -2143,6 +2409,66 @@ impl WireStudio {
                 self.confirm = None;
             }
             _ => {}
+        }
+    }
+
+    fn circuit_confirm_window(&mut self, ctx: &egui::Context, after: AfterCircuit) {
+        let lang = self.lang;
+        let s = |k: &str| t(lang, k);
+        let mut choice: Option<u8> = None;
+        egui::Window::new(s("unsaved.title"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(s("unsaved.circuit_text"));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(s("unsaved.save")).clicked() {
+                        choice = Some(0);
+                    }
+                    if ui.button(s("unsaved.discard")).clicked() {
+                        choice = Some(1);
+                    }
+                    if ui.button(s("unsaved.cancel")).clicked() {
+                        choice = Some(2);
+                    }
+                });
+            });
+        match choice {
+            Some(0) => {
+                if self.circuit_save(false) {
+                    self.confirm = None;
+                    self.after_circuit_unsaved(after, Some(ctx));
+                }
+            }
+            Some(1) => {
+                self.confirm = None;
+                self.after_circuit_unsaved(after, Some(ctx));
+            }
+            Some(2) | None => {
+                self.confirm = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn after_circuit_unsaved(&mut self, after: AfterCircuit, ctx: Option<&egui::Context>) {
+        match after {
+            AfterCircuit::Quit => {
+                self.allow_close = true;
+                if let Some(ctx) = ctx {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            AfterCircuit::New => {
+                self.circuit.model = Schematic::empty();
+                self.circuit.result = None;
+                self.circuit.dirty = false;
+                self.status = self.tr("status.circuit_new").to_string();
+            }
+            AfterCircuit::Open => self.circuit_open(),
+            AfterCircuit::Example(idx) => self.circuit_load_example(idx),
         }
     }
 

@@ -3,6 +3,49 @@
 All notable changes to WireASM and WireStudio are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-11-12
+
+### Added
+
+- New crate `wireasm-sim`: a mixed-signal simulator with no external
+  dependencies.
+  - Netlist model with resistors, capacitors, inductors, voltage and current
+    sources (DC, sine, pulse), diodes, LEDs, switches, CMOS logic gates,
+    MCU pins and ground; JSON input and output.
+  - Solver: nodal analysis (MNA) with a dense LU factorisation,
+    Newton-Raphson with damped pn-junction limiting, backward-Euler transient
+    analysis honouring initial conditions, and a complex AC sweep.
+  - Virtual microcontroller: the WireASM graph itself runs as the MCU, so
+    firmware drives real pins on the schematic (Proteus-style
+    co-simulation), with UART capture.
+  - Scope traces: peak, min, mean, RMS, rising-edge detection, CSV export.
+- New `wiresim` command-line simulator: DC, transient and AC analysis of a
+  netlist or of a schematic file saved by the IDE, optional `--mcu` graph for
+  co-simulation, `--csv` export.
+- `wirestudio`: circuit workspace (third workspace next to Graph and Code):
+  component palette, schematic canvas with pin wiring, properties inspector,
+  DC/transient/AC analyses, oscilloscope with selectable traces, probes,
+  MCU co-simulation binding, schematic save/open, netlist export.
+- WireStudio can open a schematic file from the command line and detects
+  the file kind automatically.
+- Examples: `circuit_divider`, `circuit_rc_lowpass`, `circuit_led`,
+  `circuit_mcu_led` (schematics) plus netlists `sim_voltage_divider`,
+  `sim_rc_lowpass`, `sim_halfwave`, `sim_led_resistor`, `sim_logic_and`,
+  `sim_mcu_led`.
+- Release archives now include the `wiresim` binary and the `examples` folder.
+
+### Changed
+
+- Version bumped to 0.4.0 in the workspace, the core and the CLI output.
+- Diode model defaults are `is=1e-14`, `n=1.0`, `rs=0.1`; the LED clamp in
+  the solver allows 2 V parts to conduct.
+
+### Fixed
+
+- Transient analysis starts from the initial conditions instead of taking a
+  phantom first step, so an RC charge curve matches the analytic solution.
+- The virtual MCU resumes after a delay node instead of re-entering it.
+
 ## [0.3.0] — 2026-11-12
 
 ### Added

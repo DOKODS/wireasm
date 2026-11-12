@@ -1,0 +1,14 @@
+{
+  "name": "mcu_led",
+  "description": "Virtual MCU pin through 220 ohm into an LED; bind with --pin C13=mcu",
+  "components": [
+    { "id": "U1", "kind": "mcu_pin", "pins": ["mcu"] },
+    { "id": "R1", "kind": "resistor", "pins": ["mcu", "a"], "value": 220 },
+    { "id": "D1", "kind": "led", "pins": ["a", "0"], "vf": 2.0, "if": 0.02 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "mcu", "node": "mcu" },
+    { "name": "a", "node": "a" }
+  ]
+}

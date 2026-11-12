@@ -5,6 +5,7 @@
 
 mod app;
 mod canvas;
+mod circuit;
 mod editor;
 mod i18n;
 mod inspector;

@@ -1,0 +1,21 @@
+{
+  "name": "rc_lowpass",
+  "description": "1k + 1uF low-pass, cutoff 159 Hz; AC amplitude 1 V",
+  "components": [
+    {
+      "id": "V1",
+      "kind": "vsource",
+      "pins": ["in", "0"],
+      "dc": 0,
+      "ac": 1,
+      "waveform": { "type": "sine", "amplitude": 1, "frequency": 1000 }
+    },
+    { "id": "R1", "kind": "resistor", "pins": ["in", "out"], "value": 1000 },
+    { "id": "C1", "kind": "capacitor", "pins": ["out", "0"], "value": 1e-6 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "in", "node": "in" },
+    { "name": "out", "node": "out" }
+  ]
+}

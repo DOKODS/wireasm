@@ -1,0 +1,125 @@
+{
+  "kind": "wireasm-circuit",
+  "version": "1",
+  "name": "rc_lowpass",
+  "description": "1k + 1uF low-pass driven by a 1 kHz sine",
+  "parts": [
+    {
+      "id": "V1",
+      "kind": "vsource",
+      "x": -190,
+      "y": 0,
+      "value": 0.0,
+      "value2": 0.0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "sine",
+      "amp": 1.0,
+      "freq": 1000.0,
+      "duty": 0.5
+    },
+    {
+      "id": "R1",
+      "kind": "resistor",
+      "x": -60,
+      "y": 0,
+      "value": 1000.0,
+      "value2": 0.0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1.0,
+      "freq": 1000.0,
+      "duty": 0.5
+    },
+    {
+      "id": "C1",
+      "kind": "capacitor",
+      "x": 70,
+      "y": 0,
+      "value": 1e-06,
+      "value2": 0.0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1.0,
+      "freq": 1000.0,
+      "duty": 0.5
+    },
+    {
+      "id": "GND1",
+      "kind": "ground",
+      "x": 70,
+      "y": 90,
+      "value": 0.0,
+      "value2": 0.0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1.0,
+      "freq": 1000.0,
+      "duty": 0.5
+    }
+  ],
+  "wires": [
+    {
+      "a": {
+        "part": 0,
+        "pin": "1"
+      },
+      "b": {
+        "part": 1,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 1,
+        "pin": "2"
+      },
+      "b": {
+        "part": 2,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "2"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "2"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "part": 1,
+      "pin": "2",
+      "name": "out"
+    }
+  ],
+  "analysis": "tran",
+  "dt": 2e-05,
+  "stop": 0.002,
+  "fstart": 10.0,
+  "fstop": 100000.0,
+  "points": 40,
+  "mcu": false,
+  "mcu_vdd": 3.3
+}

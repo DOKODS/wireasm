@@ -1,0 +1,13 @@
+[package]
+name = "wireasm-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mixed-signal circuit simulation for WireASM: MNA, transient, AC and MCU co-simulation"
+
+[dependencies]
+wireasm-core = { path = "../wireasm-core" }
+
+[[bin]]
+name = "wiresim"
+path = "src/bin/wiresim.rs"

@@ -1,0 +1,13 @@
+{
+  "name": "led_resistor",
+  "description": "5 V through 220 ohm into a red LED; about 13 mA",
+  "components": [
+    { "id": "V1", "kind": "vsource", "pins": ["in", "0"], "value": 5 },
+    { "id": "R1", "kind": "resistor", "pins": ["in", "a"], "value": 220 },
+    { "id": "D1", "kind": "led", "pins": ["a", "0"], "vf": 2.0, "if": 0.02 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "a", "node": "a" }
+  ]
+}

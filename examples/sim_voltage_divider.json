@@ -1,0 +1,13 @@
+{
+  "name": "voltage_divider",
+  "description": "12 V across 10k and 4.7k: out is 3.837 V",
+  "components": [
+    { "id": "V1", "kind": "vsource", "pins": ["in", "0"], "value": 12 },
+    { "id": "R1", "kind": "resistor", "pins": ["in", "out"], "value": 10000 },
+    { "id": "R2", "kind": "resistor", "pins": ["out", "0"], "value": 4700 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "out", "node": "out" }
+  ]
+}

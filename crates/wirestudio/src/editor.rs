@@ -18,6 +18,7 @@ use crate::app::{BottomTab, Job, JobKind, WireStudio};
 pub enum Workspace {
     Graph,
     Code,
+    Circuit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

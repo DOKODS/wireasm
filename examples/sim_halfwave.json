@@ -1,0 +1,20 @@
+{
+  "name": "halfwave_rectifier",
+  "description": "50 Hz half-wave rectifier: source, diode, 1k load",
+  "components": [
+    {
+      "id": "V1",
+      "kind": "vsource",
+      "pins": ["in", "0"],
+      "dc": 0,
+      "waveform": { "type": "sine", "amplitude": 5, "frequency": 50 }
+    },
+    { "id": "D1", "kind": "diode", "pins": ["in", "out"] },
+    { "id": "R1", "kind": "resistor", "pins": ["out", "0"], "value": 1000 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "in", "node": "in" },
+    { "name": "out", "node": "out" }
+  ]
+}

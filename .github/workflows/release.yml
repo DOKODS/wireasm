@@ -19,16 +19,16 @@ jobs:
         include:
           - os: ubuntu-latest
             name: x86_64-linux
-            archive: wirestudio-0.3.0-x86_64-linux.tar.gz
+            archive: wirestudio-0.4.0-x86_64-linux.tar.gz
           - os: windows-latest
             name: x86_64-windows
-            archive: wirestudio-0.3.0-x86_64-windows.zip
+            archive: wirestudio-0.4.0-x86_64-windows.zip
           - os: macos-15-intel
             name: x86_64-macos
-            archive: wirestudio-0.3.0-x86_64-macos.tar.gz
+            archive: wirestudio-0.4.0-x86_64-macos.tar.gz
           - os: macos-15
             name: aarch64-macos
-            archive: wirestudio-0.3.0-aarch64-macos.tar.gz
+            archive: wirestudio-0.4.0-aarch64-macos.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,9 @@ jobs:
           mkdir -p dist
           cp target/release/wirestudio dist/
           cp target/release/wireasm dist/
+          cp target/release/wiresim dist/
           cp README.md LICENSE CHANGELOG.md dist/
+          cp -r examples dist/examples
           tar -czf "${{ matrix.archive }}" -C dist .
 
       - name: Package (Windows)
@@ -65,7 +67,9 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/wirestudio.exe dist/
           Copy-Item target/release/wireasm.exe dist/
+          Copy-Item target/release/wiresim.exe dist/
           Copy-Item README.md, LICENSE, CHANGELOG.md dist/
+          Copy-Item -Recurse examples dist/examples
           Compress-Archive -Path dist/* -DestinationPath "${{ matrix.archive }}"
 
       - uses: actions/upload-artifact@v4

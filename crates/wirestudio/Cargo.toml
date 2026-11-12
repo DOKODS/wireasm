@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 wireasm-core = { path = "../wireasm-core" }
+wireasm-sim = { path = "../wireasm-sim" }
 rfd = "0.18"
 sys-locale = "0.3"
 

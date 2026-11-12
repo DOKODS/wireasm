@@ -1,0 +1,19 @@
+{
+  "name": "logic_and",
+  "description": "Two switches drive an AND gate; both closed means out is high",
+  "components": [
+    { "id": "V1", "kind": "vsource", "pins": ["vdd", "0"], "value": 5 },
+    { "id": "S1", "kind": "switch", "pins": ["vdd", "a"], "on": true },
+    { "id": "S2", "kind": "switch", "pins": ["vdd", "b"], "on": true },
+    { "id": "R1", "kind": "resistor", "pins": ["a", "0"], "value": 10000 },
+    { "id": "R2", "kind": "resistor", "pins": ["b", "0"], "value": 10000 },
+    { "id": "R3", "kind": "resistor", "pins": ["out", "0"], "value": 10000 },
+    { "id": "G1", "kind": "gate", "gate": "and", "pins": ["a", "b", "out"], "vdd": 5 },
+    { "id": "GND", "kind": "ground", "pins": ["0"] }
+  ],
+  "probes": [
+    { "name": "a", "node": "a" },
+    { "name": "b", "node": "b" },
+    { "name": "out", "node": "out" }
+  ]
+}
