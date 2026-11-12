@@ -1,0 +1,215 @@
+{
+  "kind": "wireasm-circuit",
+  "version": "1",
+  "name": "cmos_oscillator",
+  "description": "CMOS 4093 Schmitt NAND as an oscillator",
+  "parts": [
+    {
+      "id": "U1",
+      "kind": "gate",
+      "x": -60,
+      "y": 0,
+      "value": 0,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5,
+      "catalog": "4093",
+      "units": [
+        {
+          "func": "nand2",
+          "ins": [
+            "1A",
+            "1B"
+          ],
+          "outs": [
+            "1Y"
+          ]
+        },
+        {
+          "func": "nand2",
+          "ins": [
+            "2A",
+            "2B"
+          ],
+          "outs": [
+            "2Y"
+          ]
+        },
+        {
+          "func": "nand2",
+          "ins": [
+            "3A",
+            "3B"
+          ],
+          "outs": [
+            "3Y"
+          ]
+        },
+        {
+          "func": "nand2",
+          "ins": [
+            "4A",
+            "4B"
+          ],
+          "outs": [
+            "4Y"
+          ]
+        }
+      ],
+      "power": {
+        "vcc": "VCC",
+        "gnd": "GND",
+        "vdd": 5.0,
+        "vss": 0,
+        "vth": 2.5
+      }
+    },
+    {
+      "id": "R1",
+      "kind": "resistor",
+      "x": 90,
+      "y": -50,
+      "value": 10000,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5
+    },
+    {
+      "id": "C1",
+      "kind": "capacitor",
+      "x": 160,
+      "y": -50,
+      "value": 1e-09,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5
+    },
+    {
+      "id": "GND1",
+      "kind": "ground",
+      "x": -60,
+      "y": 110,
+      "value": 0,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5
+    }
+  ],
+  "wires": [
+    {
+      "a": {
+        "part": 0,
+        "pin": "1A"
+      },
+      "b": {
+        "part": 1,
+        "pin": "2"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "1B"
+      },
+      "b": {
+        "part": 1,
+        "pin": "2"
+      }
+    },
+    {
+      "a": {
+        "part": 1,
+        "pin": "1"
+      },
+      "b": {
+        "part": 0,
+        "pin": "1Y"
+      }
+    },
+    {
+      "a": {
+        "part": 1,
+        "pin": "2"
+      },
+      "b": {
+        "part": 2,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "2"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "2A"
+      },
+      "b": {
+        "part": 0,
+        "pin": "1Y"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "2B"
+      },
+      "b": {
+        "part": 0,
+        "pin": "1Y"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "GND"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "part": 0,
+      "pin": "1Y",
+      "name": "osc"
+    }
+  ],
+  "analysis": "tran",
+  "dt": 1e-06,
+  "stop": 0.002,
+  "fstart": 10.0,
+  "fstop": 100000.0,
+  "points": 40,
+  "mcu": false,
+  "mcu_vdd": 3.3
+}

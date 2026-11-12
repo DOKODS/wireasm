@@ -257,6 +257,8 @@ pub enum Action {
     CircuitRun,
     CircuitFit,
     CircuitExport,
+    LibraryExport,
+    LibraryImport,
 }
 
 pub struct WireStudio {
@@ -714,6 +716,66 @@ impl WireStudio {
             .replace("{}", &path.display().to_string());
     }
 
+    /// Write the component library to a file.
+    pub fn library_export(&mut self) {
+        if self.circuit.library.entries.is_empty() {
+            self.status = self.tr("lib.empty").to_string();
+            return;
+        }
+        let filter = self.tr("dialog.component_library");
+        let name = format!("{}.wirelib.json", self.circuit.library.name);
+        let Some(path) = self.pick_save(self.tr("lib.export"), &[(filter, &["json"])], &name)
+        else {
+            self.status = self.tr("status.cancelled").to_string();
+            return;
+        };
+        let text = self.circuit.library.to_json_value().stringify_pretty();
+        if let Err(e) = std::fs::write(&path, text) {
+            self.error(format!("{}: {e}", path.display()));
+            return;
+        }
+        self.remember_dir(&path);
+        self.status = self
+            .tr("lib.exported")
+            .replace("{}", &path.display().to_string());
+    }
+
+    /// Read a component library and add its parts to the palette.
+    pub fn library_import(&mut self) {
+        let filter = self.tr("dialog.component_library");
+        let Some(path) = self.pick_open(self.tr("lib.import"), &[(filter, &["json"])]) else {
+            self.status = self.tr("status.cancelled").to_string();
+            return;
+        };
+        let src = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.error(format!("{}: {e}", path.display()));
+                return;
+            }
+        };
+        let parsed = Json::parse(&src)
+            .map_err(|e| format!("JSON: {e}"))
+            .and_then(|v| wireasm_sim::Library::from_json_value(&v));
+        match parsed {
+            Ok(lib) => {
+                let count = lib.entries.len();
+                for entry in lib.entries {
+                    if self.circuit.library.find(&entry.key).is_some() {
+                        continue;
+                    }
+                    self.circuit.library.entries.push(entry);
+                }
+                self.status = self
+                    .tr("lib.imported")
+                    .replace("{}", &count.to_string())
+                    .replace("{}", &path.display().to_string());
+                self.remember_dir(&path);
+            }
+            Err(e) => self.error(self.tr("lib.import_failed").replace("{}", &e)),
+        }
+    }
+
     pub fn load_example(&mut self, idx: usize) {
         let Some((_, _, src)) = EXAMPLES.get(idx) else {
             return;
@@ -1009,6 +1071,8 @@ impl WireStudio {
             Action::CircuitRun => self.run_circuit(),
             Action::CircuitFit => self.circuit.fit_requested = true,
             Action::CircuitExport => self.circuit_export_netlist(),
+            Action::LibraryExport => self.library_export(),
+            Action::LibraryImport => self.library_import(),
             Action::ExportAsm => self.export_asm(),
             Action::ImportLibrary => self.import_library(),
             Action::ExportLibrary => self.export_library(),
@@ -1572,6 +1636,15 @@ impl WireStudio {
                     });
                     if ui.button(s("circuit.export_netlist")).clicked() {
                         action = Some(Action::CircuitExport);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(s("lib.export")).clicked() {
+                        action = Some(Action::LibraryExport);
+                        ui.close();
+                    }
+                    if ui.button(s("lib.import")).clicked() {
+                        action = Some(Action::LibraryImport);
                         ui.close();
                     }
                     ui.separator();

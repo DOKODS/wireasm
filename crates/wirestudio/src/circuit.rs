@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use wireasm_core::model::{Graph, Target};
 use wireasm_sim::schematic::{
     gate_short, Analysis, PartKind, PinAddr, Schematic, SimResult, WaveKind,
@@ -26,10 +26,7 @@ const GRID: Color32 = Color32::from_rgb(36, 40, 52);
 const GRID_STRONG: Color32 = Color32::from_rgb(52, 58, 74);
 const WIRE: Color32 = Color32::from_rgb(104, 196, 172);
 const WIRE_SEL: Color32 = Color32::from_rgb(250, 200, 90);
-const PART_BODY: Color32 = Color32::from_rgb(32, 36, 48);
-const PART_BODY_SEL: Color32 = Color32::from_rgb(40, 50, 68);
 const PART_BORDER: Color32 = Color32::from_rgb(86, 94, 116);
-const PART_BORDER_SEL: Color32 = Color32::from_rgb(96, 165, 250);
 const PIN: Color32 = Color32::from_rgb(206, 214, 228);
 const PIN_HOT: Color32 = Color32::from_rgb(250, 200, 90);
 const TEXT: Color32 = Color32::from_rgb(226, 231, 240);
@@ -51,6 +48,17 @@ const SERIES_COLORS: [Color32; 6] = [
     Color32::from_rgb(230, 120, 200),
     Color32::from_rgb(200, 200, 110),
     Color32::from_rgb(150, 150, 230),
+];
+
+/// The families of the catalogue, in the order the palette shows them.
+pub const FAMILIES: &[wireasm_sim::Family] = &[
+    wireasm_sim::Family::Ttl,
+    wireasm_sim::Family::TtlSchottky,
+    wireasm_sim::Family::Cmos,
+    wireasm_sim::Family::Ecl,
+    wireasm_sim::Family::Analog,
+    wireasm_sim::Family::Discrete,
+    wireasm_sim::Family::Virtual,
 ];
 
 /// Parts offered in the palette, in menu order.
@@ -120,6 +128,10 @@ pub struct DragPart {
 /// The editor state around a [`Schematic`] document.
 pub struct CircuitDoc {
     pub model: Schematic,
+    /// The component library the parts come from.
+    pub library: wireasm_sim::Library,
+    /// The search text of the palette.
+    pub filter: String,
     pub view: View,
     pub selected: Option<Sel>,
     pub pending: Option<PinAddr>,
@@ -140,6 +152,8 @@ impl Default for CircuitDoc {
     fn default() -> Self {
         CircuitDoc {
             model: Schematic::divider(),
+            library: wireasm_sim::builtin(),
+            filter: String::new(),
             view: View::default(),
             selected: None,
             pending: None,
@@ -179,16 +193,47 @@ impl WireStudio {
             .show(ui, |ui| {
                 ui.add_space(4.0);
                 ui.heading(s("circuit.parts"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.circuit.filter)
+                        .hint_text(s("lib.search"))
+                        .desired_width(f32::INFINITY),
+                );
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.label(RichText::new(s("lib.basic")).strong());
                     for kind in PALETTE {
                         let label = s(part_label_key(*kind));
                         if ui.selectable_label(false, label).clicked() {
-                            let center = self.circuit_center();
-                            let idx = self.circuit.model.add_part(*kind, center.x, center.y);
-                            self.circuit.selected = Some(Sel::Part(idx));
-                            self.circuit.dirty = true;
-                            self.status = self.tr("status.circuit_added").to_string();
+                            self.add_basic_part(*kind);
+                        }
+                    }
+                    // The catalogue, grouped by family the way Multisim groups
+                    // its component toolbar.
+                    let filter = self.circuit.filter.to_ascii_lowercase();
+                    for family in FAMILIES {
+                        let entries: Vec<_> = self
+                            .circuit
+                            .library
+                            .entries
+                            .iter()
+                            .filter(|e| e.family == *family)
+                            .filter(|e| {
+                                filter.is_empty()
+                                    || e.key.to_ascii_lowercase().contains(&filter)
+                                    || e.title.to_ascii_lowercase().contains(&filter)
+                            })
+                            .cloned()
+                            .collect();
+                        if entries.is_empty() {
+                            continue;
+                        }
+                        ui.separator();
+                        ui.label(RichText::new(s(family.label_key())).strong());
+                        for entry in entries {
+                            let label = format!("{}  {}", entry.key, entry.title);
+                            if ui.selectable_label(false, label).clicked() {
+                                self.add_catalog_part(&entry);
+                            }
                         }
                     }
                     ui.separator();
@@ -205,6 +250,46 @@ impl WireStudio {
                     }
                 });
             });
+    }
+
+    /// Place a basic part in the middle of the canvas.
+    fn add_basic_part(&mut self, kind: PartKind) {
+        let center = self.circuit_center();
+        let idx = self.circuit.model.add_part(kind, center.x, center.y);
+        self.circuit.selected = Some(Sel::Part(idx));
+        self.circuit.dirty = true;
+        self.status = self.tr("status.circuit_added").to_string();
+    }
+
+    /// Place a catalogue part in the middle of the canvas.
+    fn add_catalog_part(&mut self, entry: &wireasm_sim::Entry) {
+        let center = self.circuit_center();
+        let mut part = wireasm_sim::schematic::Part::new(
+            self.next_catalog_id(&entry.prefix),
+            PartKind::Gate,
+            center.x,
+            center.y,
+        );
+        part.catalog = Some(entry.key.clone());
+        part.catalog_units = entry.units.clone();
+        part.catalog_power = Some(entry.power.clone());
+        self.circuit.model.parts.push(part);
+        let idx = self.circuit.model.parts.len() - 1;
+        self.circuit.selected = Some(Sel::Part(idx));
+        self.circuit.dirty = true;
+        self.status = self.tr("status.circuit_added").to_string();
+    }
+
+    /// The next free reference designator for a prefix.
+    fn next_catalog_id(&self, prefix: &str) -> String {
+        let mut n = 1;
+        loop {
+            let id = format!("{prefix}{n}");
+            if !self.circuit.model.parts.iter().any(|p| p.id == id) {
+                return id;
+            }
+            n += 1;
+        }
     }
 
     fn circuit_center(&self) -> Pos2 {
@@ -256,6 +341,46 @@ impl WireStudio {
                 }
             }
         });
+        if part.is_catalog() {
+            // A catalogue part shows what it is and how it is wired.
+            let entry = part.catalog_entry();
+            let title = entry.as_ref().map(|e| e.title.clone()).unwrap_or_default();
+            let family = entry
+                .as_ref()
+                .map(|e| s(e.family.label_key()).to_string())
+                .unwrap_or_default();
+            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(family).weak());
+            if let Some(entry) = &entry {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} units · {} pins",
+                        entry.key,
+                        entry.unit_count(),
+                        entry.pin_count()
+                    ))
+                    .monospace()
+                    .weak(),
+                );
+            }
+            ui.separator();
+            ui.label(RichText::new(s("circuit.unit_list")).strong());
+            for unit in &part.catalog_units {
+                let ins = unit.ins.join(", ");
+                let outs = unit.outs.join(", ");
+                ui.label(
+                    RichText::new(format!("{}: {} → {}", unit.func.key(), ins, outs))
+                        .monospace()
+                        .small(),
+                );
+            }
+            ui.separator();
+            if ui.button(s("circuit.delete")).clicked() {
+                self.circuit.selected = Some(Sel::Part(idx));
+                self.circuit_delete_selected();
+            }
+            return;
+        }
         ui.label(RichText::new(s(part_label_key(part.kind))).weak());
 
         let mut part = part;
@@ -895,7 +1020,7 @@ impl WireStudio {
         for i in 0..self.circuit.model.parts.len() {
             let part = self.circuit.model.parts[i].clone();
             for pin in part.pins() {
-                let pos = self.circuit.model.pin_pos(i, pin);
+                let pos = self.circuit.model.pin_pos(i, &pin);
                 let screen = self.circuit.view.w2s(rect, pos);
                 let hot = self
                     .circuit
@@ -985,249 +1110,28 @@ impl WireStudio {
             return;
         };
         let part = part.clone();
-        let body = self.circuit.model.body_rect(index);
-        let screen = Rect::from_min_max(
-            self.circuit.view.w2s(rect, body.min),
-            self.circuit.view.w2s(rect, body.max),
-        );
-        let fill = if selected { PART_BODY_SEL } else { PART_BODY };
-        let border = if selected {
-            PART_BORDER_SEL
-        } else {
-            PART_BORDER
+        let pins: Vec<(String, Pos2)> = part
+            .pins()
+            .into_iter()
+            .map(|name| {
+                let p = self.circuit.model.pin_pos(index, &name);
+                (name, p)
+            })
+            .collect();
+        let view = &self.circuit.view;
+        let w2s = move |p: Pos2| view.w2s(rect, p);
+        let ctx = crate::symbols::Ctx {
+            part: &part,
+            painter,
+            center: Pos2::new(part.x, part.y),
+            pins: &pins,
+            w2s: &w2s,
+            zoom: self.circuit.view.zoom,
+            selected,
         };
-        let stroke = Stroke::new(if selected { 2.0 } else { 1.2 }, border);
-        let zoom = self.circuit.view.zoom;
+        crate::symbols::draw(&ctx);
 
-        match part.kind {
-            PartKind::Ground => {
-                let top = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "0"));
-                let w = 14.0 * zoom;
-                painter.line_segment(
-                    [top, top + Vec2::new(0.0, 6.0 * zoom)],
-                    Stroke::new(1.8, PIN),
-                );
-                painter.line_segment(
-                    [
-                        top + Vec2::new(-w, 6.0 * zoom),
-                        top + Vec2::new(w, 6.0 * zoom),
-                    ],
-                    Stroke::new(1.8, PIN),
-                );
-                painter.line_segment(
-                    [
-                        top + Vec2::new(-w * 0.6, 11.0 * zoom),
-                        top + Vec2::new(w * 0.6, 11.0 * zoom),
-                    ],
-                    Stroke::new(1.8, PIN),
-                );
-                painter.line_segment(
-                    [
-                        top + Vec2::new(-w * 0.3, 16.0 * zoom),
-                        top + Vec2::new(w * 0.3, 16.0 * zoom),
-                    ],
-                    Stroke::new(1.8, PIN),
-                );
-            }
-            PartKind::Diode | PartKind::Led => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                let mid = a + (b - a) * 0.5;
-                let h = 9.0 * zoom;
-                let w = (b.x - a.x) * 0.22;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        mid + Vec2::new(-w, -h),
-                        mid + Vec2::new(-w, h),
-                        mid + Vec2::new(w * 0.4, 0.0),
-                    ],
-                    fill,
-                    stroke,
-                ));
-                let bar = mid + Vec2::new(w * 0.5, 0.0);
-                painter.line_segment(
-                    [bar + Vec2::new(0.0, -h), bar + Vec2::new(0.0, h)],
-                    Stroke::new(1.8, PIN),
-                );
-                painter.line_segment([a, mid + Vec2::new(-w, 0.0)], Stroke::new(1.6, PIN));
-                painter.line_segment([bar, b], Stroke::new(1.6, PIN));
-                if part.kind == PartKind::Led {
-                    let tip = mid + Vec2::new(w * 0.2, 0.0);
-                    let arrow = Stroke::new(1.4, Color32::from_rgb(250, 210, 120));
-                    painter.line_segment(
-                        [
-                            tip + Vec2::new(0.0, -12.0 * zoom),
-                            tip + Vec2::new(9.0 * zoom, -19.0 * zoom),
-                        ],
-                        arrow,
-                    );
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![
-                            tip + Vec2::new(9.0 * zoom, -19.0 * zoom),
-                            tip + Vec2::new(8.0 * zoom, -11.0 * zoom),
-                            tip + Vec2::new(2.0 * zoom, -13.0 * zoom),
-                        ],
-                        Color32::from_rgb(250, 210, 120),
-                        Stroke::NONE,
-                    ));
-                }
-            }
-            PartKind::Capacitor => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                let mid = a + (b - a) * 0.5;
-                let h = 10.0 * zoom;
-                painter.line_segment([a, mid], Stroke::new(1.6, PIN));
-                painter.line_segment([b, mid], Stroke::new(1.6, PIN));
-                painter.line_segment(
-                    [mid + Vec2::new(0.0, -h), mid + Vec2::new(0.0, h)],
-                    Stroke::new(2.2, PIN),
-                );
-                painter.line_segment(
-                    [
-                        mid + Vec2::new(5.0 * zoom, -h),
-                        mid + Vec2::new(5.0 * zoom, h),
-                    ],
-                    Stroke::new(2.2, PIN),
-                );
-            }
-            PartKind::Inductor => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                painter.line_segment([a, a + (b - a) * 0.2], Stroke::new(1.6, PIN));
-                painter.line_segment([b, b - (b - a) * 0.2], Stroke::new(1.6, PIN));
-                let r = 7.0 * zoom;
-                for i in 0..3 {
-                    let c = a + (b - a) * (0.3 + 0.2 * i as f32);
-                    painter.circle_stroke(c, r, Stroke::new(1.6, PIN));
-                }
-            }
-            PartKind::Resistor => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                painter.line_segment([a, a + (b - a) * 0.22], Stroke::new(1.6, PIN));
-                painter.line_segment([b, b - (b - a) * 0.22], Stroke::new(1.6, PIN));
-                let r = Rect::from_min_max(a + (b - a) * 0.22, b - (b - a) * 0.22);
-                painter.rect_filled(r, 3.0, fill);
-                painter.rect_stroke(r, 3.0, stroke, StrokeKind::Middle);
-            }
-            PartKind::Vsource | PartKind::Isource => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                let mid = a + (b - a) * 0.5;
-                let r = 11.0 * zoom;
-                painter.circle_filled(mid, r, fill);
-                painter.circle_stroke(mid, r, stroke);
-                painter.line_segment([a, mid - Vec2::new(r, 0.0)], Stroke::new(1.6, PIN));
-                painter.line_segment([b, mid + Vec2::new(r, 0.0)], Stroke::new(1.6, PIN));
-                if part.kind == PartKind::Vsource {
-                    painter.line_segment(
-                        [
-                            mid + Vec2::new(-4.0, -6.0) * zoom,
-                            mid + Vec2::new(4.0, -6.0) * zoom,
-                        ],
-                        Stroke::new(1.6, TEXT),
-                    );
-                    painter.line_segment(
-                        [
-                            mid + Vec2::new(0.0, -10.0) * zoom,
-                            mid + Vec2::new(0.0, -2.0) * zoom,
-                        ],
-                        Stroke::new(1.6, TEXT),
-                    );
-                    painter.line_segment(
-                        [
-                            mid + Vec2::new(0.0, 2.0) * zoom,
-                            mid + Vec2::new(0.0, 10.0) * zoom,
-                        ],
-                        Stroke::new(1.6, TEXT),
-                    );
-                    painter.line_segment(
-                        [
-                            mid + Vec2::new(-4.0, 6.0) * zoom,
-                            mid + Vec2::new(4.0, 6.0) * zoom,
-                        ],
-                        Stroke::new(1.6, TEXT),
-                    );
-                } else {
-                    painter.line_segment(
-                        [
-                            mid + Vec2::new(0.0, -9.0) * zoom,
-                            mid + Vec2::new(0.0, 9.0) * zoom,
-                        ],
-                        Stroke::new(1.6, TEXT),
-                    );
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![
-                            mid + Vec2::new(0.0, 11.0 * zoom),
-                            mid + Vec2::new(-4.0, 3.0) * zoom,
-                            mid + Vec2::new(4.0, 3.0) * zoom,
-                        ],
-                        TEXT,
-                        Stroke::NONE,
-                    ));
-                }
-            }
-            PartKind::Switch => {
-                let a = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "1"));
-                let b = self
-                    .circuit
-                    .view
-                    .w2s(rect, self.circuit.model.pin_pos(index, "2"));
-                painter.line_segment([a, a + (b - a) * 0.25], Stroke::new(1.6, PIN));
-                painter.line_segment([b, b - (b - a) * 0.25], Stroke::new(1.6, PIN));
-                let from = a + (b - a) * 0.25;
-                let to = if part.on {
-                    b - (b - a) * 0.25
-                } else {
-                    b - (b - a) * 0.25 + Vec2::new(0.0, -11.0 * zoom)
-                };
-                painter.line_segment([from, to], Stroke::new(1.8, PIN));
-                painter.circle_filled(from, 2.6 * zoom, PIN);
-                painter.circle_filled(b - (b - a) * 0.25, 2.6 * zoom, PIN);
-            }
-            PartKind::Gate | PartKind::McuPin => {
-                painter.rect_filled(screen, 3.0, fill);
-                painter.rect_stroke(screen, 3.0, stroke, StrokeKind::Middle);
-            }
-        }
-
+        // The reference designator above the symbol.
         let anchor = self
             .circuit
             .view
@@ -1239,9 +1143,9 @@ impl WireStudio {
             FontId::monospace(11.0),
             MUTED,
         );
-        if !matches!(part.kind, PartKind::Ground) {
+        // The nominal value below it, on a plate so it stays readable.
+        if !part.is_catalog() && !matches!(part.kind, PartKind::Ground) {
             let caption = part.caption();
-            // Parts whose symbol fills the body get the caption underneath.
             let below = matches!(
                 part.kind,
                 PartKind::Diode | PartKind::Led | PartKind::Vsource | PartKind::Isource
@@ -1661,6 +1565,13 @@ impl CircuitGeometry for Schematic {
         let Some(p) = self.parts.get(part) else {
             return Rect::from_min_size(Pos2::ZERO, Vec2::ZERO);
         };
+        if p.is_catalog() {
+            let half = Vec2::new(
+                wireasm_sim::schematic::CATALOG_W * 0.5,
+                wireasm_sim::schematic::CATALOG_H * 0.5,
+            );
+            return Rect::from_center_size(Pos2::new(p.x, p.y), half * 2.0);
+        }
         let half = match p.kind {
             PartKind::Ground => Vec2::new(18.0, 14.0),
             PartKind::Gate => Vec2::new(PART_W * 0.5, 20.0),
@@ -1673,9 +1584,9 @@ impl CircuitGeometry for Schematic {
         let mut best: Option<(f32, PinAddr)> = None;
         for (i, part) in self.parts.iter().enumerate() {
             for pin in part.pins() {
-                let d = (self.pin_pos(i, pin) - world).length();
+                let d = (self.pin_pos(i, &pin) - world).length();
                 if d < 12.0 && best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
-                    best = Some((d, PinAddr::new(i, pin)));
+                    best = Some((d, PinAddr::new(i, &pin)));
                 }
             }
         }

@@ -10,6 +10,7 @@ mod editor;
 mod i18n;
 mod inspector;
 mod settings;
+mod symbols;
 
 use std::path::PathBuf;
 use std::sync::Arc;

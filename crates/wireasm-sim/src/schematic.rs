@@ -148,6 +148,13 @@ pub struct Part {
     pub freq: f64,
     /// Pulse duty cycle.
     pub duty: f64,
+    /// Catalogue key when the part comes from the component library,
+    /// e.g. `7400`.
+    pub catalog: Option<String>,
+    /// Units of a catalogue part: what each gate or flip-flop does.
+    pub catalog_units: Vec<crate::library::Unit>,
+    /// Supply of a catalogue part.
+    pub catalog_power: Option<crate::library::Power>,
 }
 
 impl Part {
@@ -166,6 +173,9 @@ impl Part {
             amp: 1.0,
             freq: 1000.0,
             duty: 0.5,
+            catalog: None,
+            catalog_units: Vec::new(),
+            catalog_power: None,
         };
         match kind {
             PartKind::Resistor => p.value = 1000.0,
@@ -188,17 +198,56 @@ impl Part {
     }
 
     /// Pin names of this part, taking the gate type into account.
-    pub fn pins(&self) -> Vec<&'static str> {
+    ///
+    /// A catalogue part names its pins after the signals of its units, the
+    /// way the datasheet does.
+    pub fn pins(&self) -> Vec<String> {
+        if !self.catalog_units.is_empty() {
+            let mut out: Vec<String> = Vec::new();
+            for unit in &self.catalog_units {
+                for name in &unit.ins {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            for unit in &self.catalog_units {
+                for name in &unit.outs {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            if let Some(power) = &self.catalog_power {
+                out.push(power.vcc.clone());
+                out.push(power.gnd.clone());
+            }
+            return out;
+        }
         match self.kind {
             PartKind::Gate => {
                 if self.gate.inputs() == 1 {
-                    vec!["a", "y"]
+                    vec!["a".to_string(), "y".to_string()]
                 } else {
-                    vec!["a", "b", "y"]
+                    vec!["a".to_string(), "b".to_string(), "y".to_string()]
                 }
             }
-            _ => self.kind.pins().to_vec(),
+            _ => self.kind.pins().iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// Whether the part comes from the component library.
+    pub fn is_catalog(&self) -> bool {
+        !self.catalog_units.is_empty()
+    }
+
+    /// The catalogue entry the part was placed from.
+    pub fn catalog_entry(&self) -> Option<crate::library::Entry> {
+        let key = self.catalog.as_ref()?;
+        crate::library::builtin()
+            .entries
+            .into_iter()
+            .find(|e| &e.key == key)
     }
 
     /// Short caption drawn inside the body.
@@ -562,10 +611,16 @@ impl Schematic {
     }
 
     /// Where a pin sits relative to the body of its part, in world units.
+    ///
+    /// A catalogue part is a package: the inputs sit on the left edge, the
+    /// outputs on the right one, and the supply pins on top and bottom.
     pub fn pin_offset(&self, part: usize, pin: &str) -> (f32, f32) {
         let Some(p) = self.parts.get(part) else {
             return (0.0, 0.0);
         };
+        if p.is_catalog() {
+            return self.catalog_pin_offset(p, pin);
+        }
         match p.kind {
             PartKind::Ground => (0.0, -PART_H * 0.5),
             PartKind::McuPin => (PART_W * 0.5, 0.0),
@@ -582,6 +637,53 @@ impl Schematic {
                 }
             }
         }
+    }
+
+    /// The place of one pin of a catalogue part.
+    fn catalog_pin_offset(&self, part: &Part, pin: &str) -> (f32, f32) {
+        let mut inputs: Vec<&String> = Vec::new();
+        let mut outputs: Vec<&String> = Vec::new();
+        for unit in &part.catalog_units {
+            for name in &unit.ins {
+                if !inputs.contains(&name) {
+                    inputs.push(name);
+                }
+            }
+        }
+        for unit in &part.catalog_units {
+            for name in &unit.outs {
+                if !outputs.contains(&name) {
+                    outputs.push(name);
+                }
+            }
+        }
+        let half_w = CATALOG_W * 0.5;
+        let row = |list: &[&String], name: &str| -> f32 {
+            match list.iter().position(|n| n.as_str() == name) {
+                Some(i) => {
+                    let count = list.len().max(1) as f32;
+                    let spacing = 16.0;
+                    let total = (count - 1.0) * spacing;
+                    -(total * 0.5) + i as f32 * spacing
+                }
+                None => 0.0,
+            }
+        };
+        if inputs.iter().any(|n| n.as_str() == pin) {
+            return (-half_w, row(&inputs, pin));
+        }
+        if outputs.iter().any(|n| n.as_str() == pin) {
+            return (half_w, row(&outputs, pin));
+        }
+        // The supply pins sit on top and bottom.
+        let power = part.catalog_power.clone().unwrap_or_default();
+        if pin == power.vcc {
+            return (0.0, -CATALOG_H * 0.5);
+        }
+        if pin == power.gnd {
+            return (0.0, CATALOG_H * 0.5);
+        }
+        (0.0, 0.0)
     }
 
     // ----------------------------------------------------------- net naming
@@ -728,6 +830,59 @@ impl Schematic {
         circuit.description = self.description.clone();
         let mut has_ground = false;
         for (idx, part) in self.parts.iter().enumerate() {
+            // A catalogue part is a package of units: every unit becomes its
+            // own component in the netlist.
+            if part.is_catalog() {
+                let power = part
+                    .catalog_power
+                    .clone()
+                    .unwrap_or_else(crate::library::Power::default);
+                let supply = nets
+                    .get(&(idx, power.vcc.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| "0".to_string());
+                for (unit_index, unit) in part.catalog_units.iter().enumerate() {
+                    let mut pins: Vec<String> = Vec::new();
+                    for name in &unit.ins {
+                        let node = nets
+                            .get(&(idx, name.clone()))
+                            .cloned()
+                            .ok_or_else(|| format!("{} pin {name} is not wired", part.id))?;
+                        pins.push(node);
+                    }
+                    for name in &unit.outs {
+                        let node = nets
+                            .get(&(idx, name.clone()))
+                            .cloned()
+                            .ok_or_else(|| format!("{} pin {name} is not wired", part.id))?;
+                        pins.push(node);
+                    }
+                    let n_in = unit.ins.len();
+                    let id = format!("{}.{}", part.id, unit_index + 1);
+                    let kind = if unit.func.is_sequential() {
+                        ComponentKind::Seq(crate::netlist::Seq {
+                            kind: crate::netlist::SeqKind::from_func(unit.func)
+                                .ok_or_else(|| format!("{} has an unknown unit", part.id))?,
+                            vdd: power.vdd,
+                            vth: power.vth,
+                            r: 50.0,
+                            n_in,
+                        })
+                    } else {
+                        ComponentKind::Logic(crate::netlist::Logic {
+                            func: unit.func,
+                            vdd: power.vdd,
+                            vth: power.vth,
+                            r: 50.0,
+                            n_in,
+                            sel_bits: unit.ins.len().saturating_sub(1),
+                        })
+                    };
+                    circuit.add(Component { id, kind, pins });
+                }
+                let _ = supply;
+                continue;
+            }
             let mut pins: Vec<String> = Vec::new();
             for pin in part.pins() {
                 let node = nets
@@ -883,6 +1038,36 @@ impl Schematic {
                 m.insert("amp".into(), Json::Num(p.amp));
                 m.insert("freq".into(), Json::Num(p.freq));
                 m.insert("duty".into(), Json::Num(p.duty));
+                if let Some(key) = &p.catalog {
+                    m.insert("catalog".into(), Json::Str(key.clone()));
+                    let units = p
+                        .catalog_units
+                        .iter()
+                        .map(|u| {
+                            let mut um = std::collections::BTreeMap::new();
+                            um.insert("func".into(), Json::Str(u.func.key().into()));
+                            um.insert(
+                                "ins".into(),
+                                Json::Arr(u.ins.iter().map(|s| Json::Str(s.clone())).collect()),
+                            );
+                            um.insert(
+                                "outs".into(),
+                                Json::Arr(u.outs.iter().map(|s| Json::Str(s.clone())).collect()),
+                            );
+                            Json::Obj(um)
+                        })
+                        .collect();
+                    m.insert("units".into(), Json::Arr(units));
+                    if let Some(power) = &p.catalog_power {
+                        let mut pm = std::collections::BTreeMap::new();
+                        pm.insert("vcc".into(), Json::Str(power.vcc.clone()));
+                        pm.insert("gnd".into(), Json::Str(power.gnd.clone()));
+                        pm.insert("vdd".into(), Json::Num(power.vdd));
+                        pm.insert("vss".into(), Json::Num(power.vss));
+                        pm.insert("vth".into(), Json::Num(power.vth));
+                        m.insert("power".into(), Json::Obj(pm));
+                    }
+                }
                 Json::Obj(m)
             })
             .collect();
@@ -946,7 +1131,7 @@ impl Schematic {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                let mut p = Part::new(id, kind, 0.0, 0.0);
+                let mut p = Part::new(id.clone(), kind, 0.0, 0.0);
                 p.x = item.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
                 p.y = item.get("y").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
                 p.value = item
@@ -974,6 +1159,53 @@ impl Schematic {
                 p.amp = item.get("amp").and_then(|x| x.as_f64()).unwrap_or(p.amp);
                 p.freq = item.get("freq").and_then(|x| x.as_f64()).unwrap_or(p.freq);
                 p.duty = item.get("duty").and_then(|x| x.as_f64()).unwrap_or(p.duty);
+                if let Some(key) = item.get("catalog").and_then(|x| x.as_str()) {
+                    p.catalog = Some(key.to_string());
+                    if let Some(Json::Arr(units)) = item.get("units") {
+                        for u in units {
+                            let func = u
+                                .get("func")
+                                .and_then(|x| x.as_str())
+                                .and_then(crate::library::Func::from_key)
+                                .ok_or_else(|| format!("part {id} has an unknown unit"))?;
+                            let mut ins = Vec::new();
+                            if let Some(Json::Arr(items)) = u.get("ins") {
+                                for i in items {
+                                    if let Some(s) = i.as_str() {
+                                        ins.push(s.to_string());
+                                    }
+                                }
+                            }
+                            let mut outs = Vec::new();
+                            if let Some(Json::Arr(items)) = u.get("outs") {
+                                for i in items {
+                                    if let Some(s) = i.as_str() {
+                                        outs.push(s.to_string());
+                                    }
+                                }
+                            }
+                            p.catalog_units
+                                .push(crate::library::Unit { func, ins, outs });
+                        }
+                    }
+                    if let Some(pw) = item.get("power") {
+                        p.catalog_power = Some(crate::library::Power {
+                            vcc: pw
+                                .get("vcc")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("VCC")
+                                .to_string(),
+                            gnd: pw
+                                .get("gnd")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("GND")
+                                .to_string(),
+                            vdd: pw.get("vdd").and_then(|x| x.as_f64()).unwrap_or(5.0),
+                            vss: pw.get("vss").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                            vth: pw.get("vth").and_then(|x| x.as_f64()).unwrap_or(2.5),
+                        });
+                    }
+                }
                 parts.push(p);
             }
         }
@@ -1055,6 +1287,11 @@ fn pin_json(p: &PinAddr) -> Json {
     m.insert("pin".into(), Json::Str(p.pin.clone()));
     Json::Obj(m)
 }
+
+/// Body size of a catalogue part, in world units.
+pub const CATALOG_W: f32 = 84.0;
+/// Body height of a catalogue part, in world units.
+pub const CATALOG_H: f32 = 56.0;
 
 /// Body size of a placed part, in world units.
 pub const PART_W: f32 = 84.0;
@@ -1176,6 +1413,63 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].pin, "C13");
         assert!(!bindings[0].node.is_empty());
+    }
+
+    #[test]
+    fn catalog_part_becomes_its_units() {
+        // A 7400 is four NAND gates; in a netlist it becomes four components.
+        let entry = crate::library::builtin()
+            .entries
+            .into_iter()
+            .find(|e| e.key == "7400")
+            .expect("7400 is in the catalogue");
+        let mut s = Schematic::empty();
+        let mut part = Part::new("U1".into(), PartKind::Gate, 0.0, 0.0);
+        part.catalog = Some(entry.key.clone());
+        part.catalog_units = entry.units.clone();
+        part.catalog_power = Some(entry.power.clone());
+        s.parts.push(part);
+        let gnd = s.add_part(PartKind::Ground, 0.0, 100.0);
+        // Wire the first gate: both inputs high, so the output is low.
+        s.wire(0, "1A", gnd, "0");
+        s.wire(0, "1B", gnd, "0");
+        s.wire(0, "1Y", gnd, "0");
+        let circuit = s.netlist().unwrap();
+        let units = circuit
+            .components
+            .iter()
+            .filter(|c| matches!(c.kind, ComponentKind::Logic(_)))
+            .count();
+        assert_eq!(units, 4, "7400 has four gates");
+    }
+
+    #[test]
+    fn catalog_nand_gates_the_led() {
+        // A 7400 wired as an inverter: the input high means the output low.
+        let entry = crate::library::builtin()
+            .entries
+            .into_iter()
+            .find(|e| e.key == "7400")
+            .expect("7400 is in the catalogue");
+        let mut s = Schematic::empty();
+        let mut part = Part::new("U1".into(), PartKind::Gate, 0.0, 0.0);
+        part.catalog = Some(entry.key.clone());
+        part.catalog_units = entry.units.clone();
+        part.catalog_power = Some(entry.power.clone());
+        s.parts.push(part);
+        // A 5 V source on input A, ground on input B, output to a probe.
+        let v = s.add_part(PartKind::Vsource, -160.0, 0.0);
+        s.parts[v].value = 5.0;
+        let gnd = s.add_part(PartKind::Ground, 0.0, 90.0);
+        s.wire(v, "1", 0, "1A");
+        s.wire(v, "2", 0, "1B");
+        s.wire(0, "1Y", gnd, "0");
+        s.probe(0, "1Y", "out");
+        let circuit = s.netlist().unwrap();
+        let mut sim = Simulator::new(&circuit, s.opts.clone()).unwrap();
+        let sol = sim.dc().unwrap();
+        // Both inputs are high, so the NAND output is low.
+        assert!(sol.node("out") < 0.5, "out={}", sol.node("out"));
     }
 
     #[test]

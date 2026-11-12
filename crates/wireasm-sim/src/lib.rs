@@ -12,6 +12,9 @@
 //! Everything is dependency-free apart from `wireasm-core` (JSON and the graph
 //! model), so the solver can be embedded in the IDE and in the CLI.
 
+pub mod ic;
+pub mod library;
+pub mod library_data;
 pub mod linalg;
 pub mod mcu;
 pub mod netlist;
@@ -19,6 +22,7 @@ pub mod schematic;
 pub mod solver;
 pub mod trace;
 
+pub use library::{builtin, Entry, Family, Func, Library, Power, Unit};
 pub use linalg::C;
 pub use mcu::VirtualMcu;
 pub use netlist::{

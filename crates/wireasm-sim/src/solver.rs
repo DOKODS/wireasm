@@ -95,6 +95,10 @@ pub struct Simulator<'a> {
     cap_v: BTreeMap<String, f64>,
     ind_i: BTreeMap<String, f64>,
     gate_v: BTreeMap<String, f64>,
+    /// Output voltage of every logic unit, keyed by component id.
+    logic_v: BTreeMap<String, f64>,
+    /// State of every clocked unit, keyed by component id.
+    seq_state: BTreeMap<String, crate::ic::State>,
     pin_v: BTreeMap<String, f64>,
     pin_comps: BTreeMap<String, Vec<String>>,
     diode_g: BTreeMap<String, f64>,
@@ -116,6 +120,8 @@ impl<'a> Simulator<'a> {
         let mut cap_v = BTreeMap::new();
         let mut ind_i = BTreeMap::new();
         let mut gate_v = BTreeMap::new();
+        let mut logic_v = BTreeMap::new();
+        let mut seq_state = BTreeMap::new();
         let mut pin_v = BTreeMap::new();
         let mut pin_comps: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -133,6 +139,17 @@ impl<'a> Simulator<'a> {
                 }
                 ComponentKind::Gate(_) => {
                     gate_v.insert(c.id.clone(), 0.0);
+                }
+                ComponentKind::Logic(l) => {
+                    for out in &c.pins[l.n_in..] {
+                        logic_v.insert(out.clone(), 0.0);
+                    }
+                }
+                ComponentKind::Seq(s) => {
+                    for out in &c.pins[s.n_in..] {
+                        logic_v.insert(out.clone(), 0.0);
+                    }
+                    seq_state.insert(c.id.clone(), crate::ic::State::new());
                 }
                 ComponentKind::McuPin => {
                     pin_v.insert(c.id.clone(), 0.0);
@@ -165,6 +182,8 @@ impl<'a> Simulator<'a> {
             cap_v,
             ind_i,
             gate_v,
+            logic_v,
+            seq_state,
             pin_v,
             pin_comps,
             diode_g: BTreeMap::new(),
@@ -362,6 +381,16 @@ impl<'a> Simulator<'a> {
                             self.stamp_norton_c(&mut a, out, 1.0 / g.r);
                         }
                     }
+                    ComponentKind::Logic(l) => {
+                        for out in &c.pins[l.n_in..] {
+                            self.stamp_norton_c(&mut a, out, 1.0 / l.r);
+                        }
+                    }
+                    ComponentKind::Seq(s) => {
+                        for out in &c.pins[s.n_in..] {
+                            self.stamp_norton_c(&mut a, out, 1.0 / s.r);
+                        }
+                    }
                     ComponentKind::McuPin => {
                         if let Some(out) = c.pins.first() {
                             self.stamp_norton_c(&mut a, out, 1.0 / self.mcu_r);
@@ -497,7 +526,7 @@ impl<'a> Simulator<'a> {
                 ComponentKind::Diode(_) | ComponentKind::Led(_) => {
                     self.stamp_g(&mut a, &c.pins[0], &c.pins[1], self.opts.gmin);
                 }
-                ComponentKind::Ground => {}
+                ComponentKind::Ground | ComponentKind::Logic(_) | ComponentKind::Seq(_) => {}
             }
         }
         let x = a.solve(b)?;
@@ -532,7 +561,7 @@ impl<'a> Simulator<'a> {
     fn solve_point(&mut self, mode: Mode, time: f64) -> Result<Solution, String> {
         let mut sol = self.solve_linear(mode, time)?;
         for _ in 0..self.opts.settle.max(1) {
-            let changed = self.update_gates(&sol);
+            let changed = self.update_gates(&sol) | self.update_logic(&sol);
             if !changed {
                 break;
             }
@@ -668,6 +697,20 @@ impl<'a> Simulator<'a> {
                         self.stamp_norton(a, b, out, vout, 1.0 / g.r);
                     }
                 }
+                ComponentKind::Logic(l) => {
+                    // A unit can drive several outputs, so the level is kept
+                    // per node.
+                    for out in &c.pins[l.n_in..] {
+                        let vout = self.logic_v.get(out).copied().unwrap_or(0.0);
+                        self.stamp_norton(a, b, out, vout, 1.0 / l.r);
+                    }
+                }
+                ComponentKind::Seq(s) => {
+                    for out in &c.pins[s.n_in..] {
+                        let vout = self.logic_v.get(out).copied().unwrap_or(0.0);
+                        self.stamp_norton(a, b, out, vout, 1.0 / s.r);
+                    }
+                }
                 ComponentKind::McuPin => {
                     let vout = self.pin_v.get(&c.id).copied().unwrap_or(0.0);
                     if let Some(out) = c.pins.first() {
@@ -697,6 +740,60 @@ impl<'a> Simulator<'a> {
             if (prev - v).abs() > 1e-9 {
                 self.gate_v.insert(c.id.clone(), v);
                 changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Evaluate the logic units: combinational ones on every iteration,
+    /// clocked ones when their clock edge arrives.
+    fn update_logic(&mut self, sol: &Solution) -> bool {
+        let mut changed = false;
+        for c in &self.circuit.components {
+            match &c.kind {
+                ComponentKind::Logic(l) => {
+                    let ins: Vec<bool> = c.pins[..l.n_in]
+                        .iter()
+                        .map(|p| sol.node(p) > l.vth)
+                        .collect();
+                    let outs = crate::ic::combinational(l.func, &ins, l.sel_bits);
+                    for (i, out) in outs.iter().enumerate() {
+                        let Some(node) = c.pins.get(l.n_in + i) else {
+                            continue;
+                        };
+                        let v = if *out { l.vdd } else { 0.0 };
+                        let prev = self.logic_v.get(node).copied().unwrap_or(0.0);
+                        if (prev - v).abs() > 1e-9 {
+                            self.logic_v.insert(node.clone(), v);
+                            changed = true;
+                        }
+                    }
+                }
+                ComponentKind::Seq(s) => {
+                    let ins: Vec<bool> = c.pins[..s.n_in]
+                        .iter()
+                        .map(|p| sol.node(p) > s.vth)
+                        .collect();
+                    let mut state = self
+                        .seq_state
+                        .get(&c.id)
+                        .copied()
+                        .unwrap_or_else(crate::ic::State::new);
+                    let outs = crate::ic::sequential(s.kind.func(), &ins, &mut state);
+                    self.seq_state.insert(c.id.clone(), state);
+                    for (i, out) in outs.iter().enumerate() {
+                        let Some(node) = c.pins.get(s.n_in + i) else {
+                            continue;
+                        };
+                        let v = if *out { s.vdd } else { 0.0 };
+                        let prev = self.logic_v.get(node).copied().unwrap_or(0.0);
+                        if (prev - v).abs() > 1e-9 {
+                            self.logic_v.insert(node.clone(), v);
+                            changed = true;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         changed

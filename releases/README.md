@@ -1,17 +1,17 @@
 # Releases
 
 This folder holds locally built archives. Release archives are produced by
-`.github/workflows/release.yml` when a tag like `v0.4.0` is pushed, and are
+`.github/workflows/release.yml` when a tag like `v0.4.1` is pushed, and are
 attached to the GitHub release.
 
 Expected archive names:
 
 | Archive | Platform |
 |---|---|
-| `wirestudio-0.4.0-aarch64-macos.tar.gz` | macOS on Apple Silicon |
-| `wirestudio-0.4.0-x86_64-macos.tar.gz` | macOS on Intel |
-| `wirestudio-0.4.0-x86_64-linux.tar.gz` | Linux x86-64 |
-| `wirestudio-0.4.0-x86_64-windows.zip` | Windows x86-64 |
+| `wirestudio-0.4.1-aarch64-macos.tar.gz` | macOS on Apple Silicon |
+| `wirestudio-0.4.1-x86_64-macos.tar.gz` | macOS on Intel |
+| `wirestudio-0.4.1-x86_64-linux.tar.gz` | Linux x86-64 |
+| `wirestudio-0.4.1-x86_64-windows.zip` | Windows x86-64 |
 
 Every archive contains three executables:
 

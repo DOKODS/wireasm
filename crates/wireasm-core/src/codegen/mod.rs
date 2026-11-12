@@ -11,7 +11,7 @@ use crate::model::*;
 use crate::validate::{validate, Diagnostic, Severity};
 use std::collections::BTreeMap;
 
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.4.1";
 
 #[derive(Clone, Debug, Default)]
 pub struct CompileStats {

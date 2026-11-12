@@ -227,6 +227,115 @@ impl Gate {
     }
 }
 
+/// The kind of a sequential unit, as understood by the solver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeqKind {
+    /// D flip-flop, rising edge.
+    Dff,
+    /// D flip-flop, falling edge.
+    DffNeg,
+    /// JK flip-flop.
+    Jk,
+    /// T flip-flop.
+    Tff,
+    /// 4-bit binary counter, up.
+    Counter4,
+    /// 4-bit binary counter, down.
+    Counter4Down,
+    /// Decade counter.
+    BcdCounter,
+    /// 8-bit shift register.
+    Shift8,
+}
+
+impl SeqKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            SeqKind::Dff => "dff",
+            SeqKind::DffNeg => "dff_neg",
+            SeqKind::Jk => "jk",
+            SeqKind::Tff => "tff",
+            SeqKind::Counter4 => "counter4",
+            SeqKind::Counter4Down => "counter4_down",
+            SeqKind::BcdCounter => "bcd_counter",
+            SeqKind::Shift8 => "shift8",
+        }
+    }
+
+    /// The catalogue function this kind implements.
+    pub fn func(self) -> crate::library::Func {
+        use crate::library::Func;
+        match self {
+            SeqKind::Dff => Func::Dff,
+            SeqKind::DffNeg => Func::DffNeg,
+            SeqKind::Jk => Func::Jk,
+            SeqKind::Tff => Func::Tff,
+            SeqKind::Counter4 => Func::Counter4,
+            SeqKind::Counter4Down => Func::Counter4Down,
+            SeqKind::BcdCounter => Func::BcdCounter,
+            SeqKind::Shift8 => Func::Shift8,
+        }
+    }
+
+    /// Build a kind from a catalogue function.
+    pub fn from_func(func: crate::library::Func) -> Option<SeqKind> {
+        use crate::library::Func;
+        match func {
+            Func::Dff => Some(SeqKind::Dff),
+            Func::DffNeg => Some(SeqKind::DffNeg),
+            Func::Jk => Some(SeqKind::Jk),
+            Func::Tff => Some(SeqKind::Tff),
+            Func::Counter4 => Some(SeqKind::Counter4),
+            Func::Counter4Down => Some(SeqKind::Counter4Down),
+            Func::BcdCounter => Some(SeqKind::BcdCounter),
+            Func::Shift8 => Some(SeqKind::Shift8),
+            _ => None,
+        }
+    }
+}
+
+/// A logic unit that is not clocked: a gate inside a package.
+#[derive(Clone, Debug)]
+pub struct Logic {
+    /// What the unit does.
+    pub func: crate::library::Func,
+    /// Supply level of the package, in volts.
+    pub vdd: f64,
+    /// Input threshold, in volts.
+    pub vth: f64,
+    /// Output resistance of the drivers.
+    pub r: f64,
+    /// How many of the pins are inputs; the rest are outputs.
+    pub n_in: usize,
+    /// How many pins of a multiplexer select the data input.
+    pub sel_bits: usize,
+}
+
+/// A unit of a logic integrated circuit: a gate, a flip-flop or a counter.
+#[derive(Clone, Debug)]
+pub struct IcUnit {
+    pub func: crate::library::Func,
+    /// Signal names of the inputs.
+    pub ins: Vec<String>,
+    /// Signal names of the outputs.
+    pub outs: Vec<String>,
+}
+
+/// A clocked logic unit: a flip-flop or a counter.
+#[derive(Clone, Debug)]
+pub struct Seq {
+    /// What the unit does.
+    pub kind: SeqKind,
+    /// Supply level of the package, in volts.
+    pub vdd: f64,
+    /// Input threshold, in volts.
+    pub vth: f64,
+    /// Output resistance of the drivers.
+    pub r: f64,
+    /// How many of the pins are inputs; the rest are outputs.
+    pub n_in: usize,
+}
+
 #[derive(Clone, Debug)]
 pub enum ComponentKind {
     Resistor {
@@ -251,6 +360,10 @@ pub enum ComponentKind {
     },
     Ground,
     Gate(Gate),
+    /// A combinational logic unit from the catalogue.
+    Logic(Logic),
+    /// A clocked logic unit from the catalogue.
+    Seq(Seq),
     /// A pin driven by the virtual MCU. The output voltage is set by the
     /// simulator, not by the netlist.
     McuPin,
@@ -370,6 +483,24 @@ impl Circuit {
                 ComponentKind::McuPin => {
                     if c.pins.len() != 1 {
                         return Err(format!("mcu pin `{}` needs one node", c.id));
+                    }
+                }
+                ComponentKind::Logic(l) => {
+                    let want = crate::ic::output_count_of(l.func, &c.pins[l.n_in..]);
+                    if c.pins.len() != l.n_in + want {
+                        return Err(format!(
+                            "logic `{}` needs {} inputs and {} outputs",
+                            c.id, l.n_in, want
+                        ));
+                    }
+                }
+                ComponentKind::Seq(s) => {
+                    let want = crate::ic::output_count_of(s.kind.func(), &c.pins[s.n_in..]);
+                    if c.pins.len() != s.n_in + want {
+                        return Err(format!(
+                            "clocked unit `{}` needs {} inputs and {} outputs",
+                            c.id, s.n_in, want
+                        ));
                     }
                 }
                 ComponentKind::Gate(g) => {
@@ -499,6 +630,23 @@ impl Circuit {
                 }
                 ComponentKind::McuPin => {
                     m.insert("kind".into(), Json::Str("mcu_pin".into()));
+                }
+                ComponentKind::Logic(l) => {
+                    m.insert("kind".into(), Json::Str("ic_logic".into()));
+                    m.insert("func".into(), Json::Str(l.func.key().into()));
+                    m.insert("n_in".into(), Json::Num(l.n_in as f64));
+                    m.insert("sel_bits".into(), Json::Num(l.sel_bits as f64));
+                    m.insert("vdd".into(), Json::Num(l.vdd));
+                    m.insert("vth".into(), Json::Num(l.vth));
+                    m.insert("r".into(), Json::Num(l.r));
+                }
+                ComponentKind::Seq(s) => {
+                    m.insert("kind".into(), Json::Str("ic_seq".into()));
+                    m.insert("seq".into(), Json::Str(s.kind.key().into()));
+                    m.insert("n_in".into(), Json::Num(s.n_in as f64));
+                    m.insert("vdd".into(), Json::Num(s.vdd));
+                    m.insert("vth".into(), Json::Num(s.vth));
+                    m.insert("r".into(), Json::Num(s.r));
                 }
             }
             items.push(Json::Obj(m));
@@ -680,6 +828,36 @@ fn parse_component(v: &Json) -> Result<Component, String> {
             })
         }
         "mcu_pin" | "pin" | "mcupin" => ComponentKind::McuPin,
+        "ic_logic" | "catalogue_logic" => {
+            let func = v
+                .get("func")
+                .and_then(|x| x.as_str())
+                .and_then(crate::library::Func::from_key)
+                .ok_or_else(|| format!("component `{id}` has an unknown logic function"))?;
+            ComponentKind::Logic(Logic {
+                func,
+                vdd: n(&["vdd", "supply"], 5.0),
+                vth: n(&["vth", "threshold"], 2.5),
+                r: n(&["r", "rout", "output_resistance"], 50.0),
+                n_in: n(&["n_in", "inputs"], 2.0) as usize,
+                sel_bits: n(&["sel_bits", "select"], 0.0) as usize,
+            })
+        }
+        "ic_seq" | "catalogue_seq" => {
+            let func = v
+                .get("seq")
+                .and_then(|x| x.as_str())
+                .and_then(crate::library::Func::from_key)
+                .and_then(SeqKind::from_func)
+                .ok_or_else(|| format!("component `{id}` has an unknown clocked function"))?;
+            ComponentKind::Seq(Seq {
+                kind: func,
+                vdd: n(&["vdd", "supply"], 5.0),
+                vth: n(&["vth", "threshold"], 2.5),
+                r: n(&["r", "rout", "output_resistance"], 50.0),
+                n_in: n(&["n_in", "inputs"], 2.0) as usize,
+            })
+        }
         other => return Err(format!("component `{id}` has unknown kind `{other}`")),
     };
     Ok(Component {

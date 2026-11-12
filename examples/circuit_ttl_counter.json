@@ -1,0 +1,211 @@
+{
+  "kind": "wireasm-circuit",
+  "version": "1",
+  "name": "ttl_counter",
+  "description": "TTL 74161 4-bit counter clocked at 1 kHz",
+  "parts": [
+    {
+      "id": "V1",
+      "kind": "vsource",
+      "x": -230,
+      "y": -60,
+      "value": 0,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "pulse",
+      "amp": 5,
+      "freq": 1000,
+      "duty": 0.5
+    },
+    {
+      "id": "V2",
+      "kind": "vsource",
+      "x": -230,
+      "y": 40,
+      "value": 5,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5
+    },
+    {
+      "id": "U1",
+      "kind": "gate",
+      "x": -60,
+      "y": -40,
+      "value": 0,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5,
+      "catalog": "74161",
+      "units": [
+        {
+          "func": "counter4",
+          "ins": [
+            "CLK",
+            "CLR",
+            "LD",
+            "A",
+            "B",
+            "C",
+            "D",
+            "ENP",
+            "ENT"
+          ],
+          "outs": [
+            "Q0",
+            "Q1",
+            "Q2",
+            "Q3",
+            "RCO"
+          ]
+        }
+      ],
+      "power": {
+        "vcc": "VCC",
+        "gnd": "GND",
+        "vdd": 5.0,
+        "vss": 0,
+        "vth": 1.4
+      }
+    },
+    {
+      "id": "GND1",
+      "kind": "ground",
+      "x": -60,
+      "y": 110,
+      "value": 0,
+      "value2": 0,
+      "on": false,
+      "gate": "and",
+      "pin": "",
+      "wave": "dc",
+      "amp": 1,
+      "freq": 1000,
+      "duty": 0.5
+    }
+  ],
+  "wires": [
+    {
+      "a": {
+        "part": 0,
+        "pin": "1"
+      },
+      "b": {
+        "part": 2,
+        "pin": "CLK"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "CLR"
+      },
+      "b": {
+        "part": 1,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "LD"
+      },
+      "b": {
+        "part": 1,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "ENP"
+      },
+      "b": {
+        "part": 1,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "ENT"
+      },
+      "b": {
+        "part": 1,
+        "pin": "1"
+      }
+    },
+    {
+      "a": {
+        "part": 2,
+        "pin": "GND"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    },
+    {
+      "a": {
+        "part": 0,
+        "pin": "2"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    },
+    {
+      "a": {
+        "part": 1,
+        "pin": "2"
+      },
+      "b": {
+        "part": 3,
+        "pin": "0"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "part": 2,
+      "pin": "Q0",
+      "name": "q0"
+    },
+    {
+      "part": 2,
+      "pin": "Q1",
+      "name": "q1"
+    },
+    {
+      "part": 2,
+      "pin": "Q2",
+      "name": "q2"
+    },
+    {
+      "part": 2,
+      "pin": "Q3",
+      "name": "q3"
+    }
+  ],
+  "analysis": "tran",
+  "dt": 1e-05,
+  "stop": 0.005,
+  "fstart": 10.0,
+  "fstop": 100000.0,
+  "points": 40,
+  "mcu": false,
+  "mcu_vdd": 3.3
+}

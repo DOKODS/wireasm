@@ -3,6 +3,36 @@
 All notable changes to WireASM and WireStudio are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] — 2026-11-12
+
+### Added
+
+- GOST graphical symbols for every part in the schematic editor: resistors
+  as a rectangle (ГОСТ 2.722), inductors as three arcs (2.723), capacitors as
+  two plates (2.725), diodes and LEDs (2.727), current and voltage sources
+  (2.730, 2.735), transistors (2.741), the earth symbol (2.742), switches
+  (2.759), logic elements as a box with the function mark (2.610) and
+  integrated circuits as a package with the pins on its edges (2.318).
+- A component catalogue of 133 parts in the families of the Multisim
+  component toolbar: basic parts, TTL 74xx, TTL Schottky (74LS, 74S, 74HC),
+  CMOS 4000, ECL 10xxx, analog blocks and discrete devices. Every entry
+  carries its pinout, its supply and the logic of its units.
+- Logic integrated circuits are simulated by their units: a 7400 is four NAND
+  gates, a 7474 two D flip-flops, a 74161 a counter. Clocked units keep their
+  state between edges and count on the real time of the circuit.
+- Import and export of component libraries: File → Import/Export component
+  library… writes and reads a JSON set of parts, so a user can share their own
+  elements.
+- Examples: `circuit_ttl_nand`, `circuit_ttl_counter`,
+  `circuit_cmos_oscillator`.
+
+### Fixed
+
+- A catalogue part with unconnected pins no longer stops the netlist; the
+  free pins simply keep their own nets.
+- The clear input of a TTL counter and shift register is active low, as in
+  the real chips.
+
 ## [0.4.0] — 2026-11-12
 
 ### Added
