@@ -528,6 +528,25 @@ AVR (Arduino Uno/Nano), STM32 — следующим этапом.
 - 7400 как инвертор: высокие входы дают низкий выход.
 - Библиотека компонентов переживает круг JSON.
 
+### Выпуск 0.4.1
+
+- Версия `0.4.1` в `Cargo.toml`, `VERSION` ядра, README, `docs/language.md`,
+  плане, журнале, `CHANGELOG.md`, именах архивов `release.yml` и
+  `releases/README.md`.
+- Локальный архив `releases/wirestudio-0.4.1-aarch64-macos.tar.gz` (3.6 МБ).
+- Коммит `37b706d`, тег `v0.4.1`, релиз
+  https://github.com/DOKODS/wireasm/releases/tag/v0.4.1.
+- CI на `main` — success: ubuntu 36 с, macos 53 с, windows 1 мин 39 с.
+  Первый прогон отменил macOS-задачу: раннер был занят сборкой релиза;
+  перезапуск прошёл чисто.
+- Release на `v0.4.1` — success, четыре архива: `aarch64-macos` (3.5 МБ),
+  `x86_64-macos` (3.9 МБ), `x86_64-linux` (4.8 МБ), `x86_64-windows` (4.2 МБ).
+- Скачанный из релиза `aarch64-macos`: `wireasm --help` печатает 0.4.1,
+  `wiresim examples/circuit_divider.json` — 3.836735 В, счётчик 74161
+  считает q0 и q1.
+- Папка переименована в `WIREASM_AARCH64_X86_0.4.1`, индекс проектов
+  обновлён.
+
 ### Дальше
 
 0.5.0 — SPICE-модели (`.model`), транзисторы, интерактивные пробники,
