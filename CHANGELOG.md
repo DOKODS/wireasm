@@ -32,6 +32,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `circuit_mcu_led` (schematics) plus netlists `sim_voltage_divider`,
   `sim_rc_lowpass`, `sim_halfwave`, `sim_led_resistor`, `sim_logic_and`,
   `sim_mcu_led`.
+- `wirebench` binary and the `tools/` scripts that compare the solver with
+  ngspice on identical circuits.
 - Release archives now include the `wiresim` binary and the `examples` folder.
 
 ### Changed
