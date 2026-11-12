@@ -400,7 +400,7 @@ releases/              локальные архивы и правила рел�
 На macOS AArch64 (`rustc 1.99.1`, Apple clang, avr-gcc 7.3.0,
 arm-none-eabi-gcc 16.2.0, arduino-cli 1.6.0):
 
-- `cargo test --workspace` — 46 тестов, все проходят.
+- `cargo test --workspace` — 47 тестов, все проходят.
 - `cargo clippy --all-targets -- -D warnings` — без предупреждений.
 - Моделирование: делитель 12 В → 3.837 В; RC-фильтр 1 кОм/1 мкФ → срез −3 дБ
   на 158 Гц; светодиод 220 Ом от 5 В → 2.048 В и 13.4 мА; выпрямитель →

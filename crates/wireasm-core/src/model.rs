@@ -798,7 +798,17 @@ impl Graph {
 
         let nodes = match v.get("nodes") {
             Some(Json::Arr(nodes)) => nodes,
-            _ => return Err("graph has no 'nodes' array".to_string()),
+            _ => {
+                // A schematic is a different document; point at the tool that
+                // understands it instead of failing with a cryptic message.
+                if v.get("kind").and_then(|x| x.as_str()) == Some("wireasm-circuit") {
+                    return Err(
+                        "this file is a circuit schematic, not a graph; use `wiresim` to simulate it"
+                            .to_string(),
+                    );
+                }
+                return Err("graph has no 'nodes' array".to_string());
+            }
         };
         for item in nodes {
             let id = item

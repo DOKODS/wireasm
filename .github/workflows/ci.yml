@@ -44,7 +44,16 @@ jobs:
         run: |
           for f in examples/*.json; do
             case "$f" in
-              *.wirelib.json) continue ;;
+              examples/*.wirelib.json) continue ;;
+              examples/circuit_*.json) continue ;;
+              examples/sim_*.json) continue ;;
             esac
             cargo run --release -p wireasm-cli -- "$f" --check
+          done
+
+      - name: Simulate every circuit
+        shell: bash
+        run: |
+          for f in examples/circuit_*.json examples/sim_*.json; do
+            cargo run --release -p wireasm-sim --bin wiresim -- "$f" --analysis dc
           done

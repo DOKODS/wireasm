@@ -439,4 +439,12 @@ mod tests {
         assert_eq!(g.merge_library(&lib), 1);
         assert!(g.custom("lib_add").is_some());
     }
+
+    #[test]
+    fn a_schematic_is_not_a_graph() {
+        let src = r#"{"kind":"wireasm-circuit","name":"c","parts":[]}"#;
+        let v = json::Json::parse(src).unwrap();
+        let err = Graph::from_json_value(&v).unwrap_err();
+        assert!(err.contains("circuit schematic"), "{err}");
+    }
 }

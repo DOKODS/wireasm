@@ -466,7 +466,7 @@ AVR (Arduino Uno/Nano), STM32 — следующим этапом.
 
 ### Проверено
 
-- `cargo test --workspace` — 46 тестов (19 core, 21 sim, 6 wirestudio).
+- `cargo test --workspace` — 47 тестов (20 core, 21 sim, 6 wirestudio).
 - `cargo clippy --all-targets -- -D warnings` — чисто; `cargo fmt --all`.
 - Делитель: 3.836735 В. Светодиод: 2.048 В, 13.4 мА. RC-срез: −2.99 дБ на
   158 Гц. Выпрямитель: пик 4.31 В. Логика AND: выход высокий.
