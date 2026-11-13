@@ -99,6 +99,14 @@ pub struct Simulator<'a> {
     logic_v: BTreeMap<String, f64>,
     /// State of every clocked unit, keyed by component id.
     seq_state: BTreeMap<String, crate::ic::State>,
+    /// The output voltage of every amplifier and comparator.
+    amp_v: BTreeMap<String, f64>,
+    /// Whether a transistor conducts, from the last iteration.
+    bjt_on: BTreeMap<String, bool>,
+    /// Whether a field-effect transistor conducts.
+    fet_on: BTreeMap<String, bool>,
+    /// The state of every 555 timer: `true` when the output is high.
+    timer_on: BTreeMap<String, bool>,
     pin_v: BTreeMap<String, f64>,
     pin_comps: BTreeMap<String, Vec<String>>,
     diode_g: BTreeMap<String, f64>,
@@ -122,6 +130,10 @@ impl<'a> Simulator<'a> {
         let mut gate_v = BTreeMap::new();
         let mut logic_v = BTreeMap::new();
         let mut seq_state = BTreeMap::new();
+        let mut amp_v = BTreeMap::new();
+        let mut bjt_on = BTreeMap::new();
+        let mut fet_on = BTreeMap::new();
+        let mut timer_on = BTreeMap::new();
         let mut pin_v = BTreeMap::new();
         let mut pin_comps: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -150,6 +162,18 @@ impl<'a> Simulator<'a> {
                         logic_v.insert(out.clone(), 0.0);
                     }
                     seq_state.insert(c.id.clone(), crate::ic::State::new());
+                }
+                ComponentKind::OpAmp(_) | ComponentKind::Comparator(_) => {
+                    amp_v.insert(c.id.clone(), 0.0);
+                }
+                ComponentKind::Bjt(_) => {
+                    bjt_on.insert(c.id.clone(), false);
+                }
+                ComponentKind::Mosfet(_) => {
+                    fet_on.insert(c.id.clone(), false);
+                }
+                ComponentKind::Timer555(_) => {
+                    timer_on.insert(c.id.clone(), false);
                 }
                 ComponentKind::McuPin => {
                     pin_v.insert(c.id.clone(), 0.0);
@@ -184,6 +208,10 @@ impl<'a> Simulator<'a> {
             gate_v,
             logic_v,
             seq_state,
+            amp_v,
+            bjt_on,
+            fet_on,
+            timer_on,
             pin_v,
             pin_comps,
             diode_g: BTreeMap::new(),
@@ -382,6 +410,16 @@ impl<'a> Simulator<'a> {
                         }
                     }
                     ComponentKind::Instrument(_) => {}
+                    ComponentKind::OpAmp(model) => {
+                        self.stamp_norton_c(&mut a, &c.pins[2], 1.0 / model.rout);
+                    }
+                    ComponentKind::Comparator(model) => {
+                        self.stamp_norton_c(&mut a, &c.pins[2], 1.0 / model.rout);
+                    }
+                    ComponentKind::Bjt(_) | ComponentKind::Mosfet(_) => {}
+                    ComponentKind::Timer555(model) => {
+                        self.stamp_norton_c(&mut a, &c.pins[3], 1.0 / model.rout);
+                    }
                     ComponentKind::Logic(l) => {
                         for out in &c.pins[l.n_in..] {
                             self.stamp_norton_c(&mut a, out, 1.0 / l.r);
@@ -558,7 +596,12 @@ impl<'a> Simulator<'a> {
                 ComponentKind::Ground
                 | ComponentKind::Logic(_)
                 | ComponentKind::Seq(_)
-                | ComponentKind::Instrument(_) => {}
+                | ComponentKind::Instrument(_)
+                | ComponentKind::OpAmp(_)
+                | ComponentKind::Comparator(_)
+                | ComponentKind::Bjt(_)
+                | ComponentKind::Mosfet(_)
+                | ComponentKind::Timer555(_) => {}
             }
         }
         let x = a.solve(b)?;
@@ -593,7 +636,9 @@ impl<'a> Simulator<'a> {
     fn solve_point(&mut self, mode: Mode, time: f64) -> Result<Solution, String> {
         let mut sol = self.solve_linear(mode, time)?;
         for _ in 0..self.opts.settle.max(1) {
-            let changed = self.update_gates(&sol) | self.update_logic(&sol);
+            let changed = self.update_gates(&sol)
+                | self.update_logic(&sol)
+                | self.update_analog(&sol);
             if !changed {
                 break;
             }
@@ -751,6 +796,36 @@ impl<'a> Simulator<'a> {
                 }
                 ComponentKind::Diode(_) | ComponentKind::Led(_) | ComponentKind::Ground => {}
                 ComponentKind::Instrument(_) => {}
+                ComponentKind::OpAmp(model) => {
+                    let vout = self.amp_v.get(&c.id).copied().unwrap_or(0.0);
+                    self.stamp_norton(a, b, &c.pins[2], vout, 1.0 / model.rout);
+                }
+                ComponentKind::Comparator(model) => {
+                    let vout = self.amp_v.get(&c.id).copied().unwrap_or(0.0);
+                    self.stamp_norton(a, b, &c.pins[2], vout, 1.0 / model.rout);
+                }
+                ComponentKind::Bjt(_) => {
+                    // The collector-emitter path behaves like a switch; the
+                    // state comes from the last iteration.
+                    let on = self.bjt_on.get(&c.id).copied().unwrap_or(false);
+                    let r = if on { 10.0 } else { 1e9 };
+                    self.stamp_g(a, &c.pins[1], &c.pins[2], 1.0 / r);
+                }
+                ComponentKind::Mosfet(_) => {
+                    let on = self.fet_on.get(&c.id).copied().unwrap_or(false);
+                    let r = if on { 100.0 } else { 1e9 };
+                    self.stamp_g(a, &c.pins[1], &c.pins[2], 1.0 / r);
+                }
+                ComponentKind::Timer555(model) => {
+                    // Pins: GND, TRIG, THR, OUT, DISCH, CTRL, VCC.
+                    let on = self.timer_on.get(&c.id).copied().unwrap_or(false);
+                    let vout = if on { model.vcc } else { 0.0 };
+                    self.stamp_norton(a, b, &c.pins[3], vout, 1.0 / model.rout);
+                    // The discharge pin is a switch to ground: it conducts
+                    // while the output is low.
+                    let r = if on { 1e9 } else { 20.0 };
+                    self.stamp_g(a, &c.pins[4], &c.pins[0], 1.0 / r);
+                }
             }
         }
     }
@@ -780,6 +855,80 @@ impl<'a> Simulator<'a> {
 
     /// Evaluate the logic units: combinational ones on every iteration,
     /// clocked ones when their clock edge arrives.
+    /// Update the amplifiers, the comparators and the transistors from the
+    /// solution of this iteration.
+    fn update_analog(&mut self, sol: &Solution) -> bool {
+        let mut changed = false;
+        for c in &self.circuit.components {
+            match &c.kind {
+                ComponentKind::OpAmp(model) => {
+                    let diff = sol.voltage(&c.pins[0], &c.pins[1]);
+                    let wanted = (model.gain * diff).clamp(model.vss, model.vdd);
+                    let prev = self.amp_v.get(&c.id).copied().unwrap_or(0.0);
+                    if (prev - wanted).abs() > 1e-6 {
+                        self.amp_v.insert(c.id.clone(), wanted);
+                        changed = true;
+                    }
+                }
+                ComponentKind::Comparator(model) => {
+                    let diff = sol.voltage(&c.pins[0], &c.pins[1]);
+                    let wanted = if diff > model.vth { model.vdd } else { 0.0 };
+                    let prev = self.amp_v.get(&c.id).copied().unwrap_or(0.0);
+                    if (prev - wanted).abs() > 1e-6 {
+                        self.amp_v.insert(c.id.clone(), wanted);
+                        changed = true;
+                    }
+                }
+                ComponentKind::Bjt(model) => {
+                    let vbe = sol.voltage(&c.pins[0], &c.pins[2]);
+                    let on = if model.npn {
+                        vbe > model.vbe
+                    } else {
+                        vbe < -model.vbe
+                    };
+                    let prev = self.bjt_on.get(&c.id).copied().unwrap_or(false);
+                    if prev != on {
+                        self.bjt_on.insert(c.id.clone(), on);
+                        changed = true;
+                    }
+                }
+                ComponentKind::Mosfet(model) => {
+                    let vgs = sol.voltage(&c.pins[0], &c.pins[2]);
+                    let on = if model.nch {
+                        vgs > model.vto
+                    } else {
+                        vgs < -model.vto
+                    };
+                    let prev = self.fet_on.get(&c.id).copied().unwrap_or(false);
+                    if prev != on {
+                        self.fet_on.insert(c.id.clone(), on);
+                        changed = true;
+                    }
+                }
+                ComponentKind::Timer555(model) => {
+                    // The trigger pulls the output high, the threshold pulls
+                    // it low. Between them the timer keeps its state.
+                    let gnd = c.pins[0].clone();
+                    let v_trig = sol.voltage(&c.pins[1], &gnd);
+                    let v_thr = sol.voltage(&c.pins[2], &gnd);
+                    let prev = self.timer_on.get(&c.id).copied().unwrap_or(false);
+                    let mut next = prev;
+                    if v_trig < model.vcc / 3.0 {
+                        next = true;
+                    } else if v_thr > model.vcc * 2.0 / 3.0 {
+                        next = false;
+                    }
+                    if next != prev {
+                        self.timer_on.insert(c.id.clone(), next);
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
+    }
+
     fn update_logic(&mut self, sol: &Solution) -> bool {
         let mut changed = false;
         for c in &self.circuit.components {
@@ -789,7 +938,7 @@ impl<'a> Simulator<'a> {
                         .iter()
                         .map(|p| sol.node(p) > l.vth)
                         .collect();
-                    let outs = crate::ic::combinational(l.func, &ins, l.sel_bits);
+                    let outs = crate::ic::combinational(l.func, &ins, l.sel_bits, l.has_enable);
                     for (i, out) in outs.iter().enumerate() {
                         let Some(node) = c.pins.get(l.n_in + i) else {
                             continue;

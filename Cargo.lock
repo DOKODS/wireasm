@@ -3044,25 +3044,25 @@ dependencies = [
 
 [[package]]
 name = "wireasm-cli"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "wireasm-core",
 ]
 
 [[package]]
 name = "wireasm-core"
-version = "0.4.2"
+version = "0.4.3"
 
 [[package]]
 name = "wireasm-sim"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "wireasm-core",
 ]
 
 [[package]]
 name = "wirestudio"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "eframe",
  "rfd",

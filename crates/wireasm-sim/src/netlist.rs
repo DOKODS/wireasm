@@ -309,6 +309,8 @@ pub struct Logic {
     pub n_in: usize,
     /// How many pins of a multiplexer select the data input.
     pub sel_bits: usize,
+    /// Whether the unit has an enable input.
+    pub has_enable: bool,
 }
 
 /// A unit of a logic integrated circuit: a gate, a flip-flop or a counter.
@@ -369,6 +371,76 @@ pub enum ComponentKind {
     McuPin,
     /// A measuring instrument: it watches nodes and reports what it sees.
     Instrument(Instrument),
+    /// A bipolar transistor: base, collector, emitter.
+    Bjt(Bjt),
+    /// A field-effect transistor: gate, drain, source.
+    Mosfet(Mosfet),
+    /// An operational amplifier: two inputs and an output.
+    OpAmp(OpAmp),
+    /// A comparator: two inputs and an output.
+    Comparator(Comparator),
+    /// The 555 timer.
+    Timer555(Timer555),
+}
+
+/// The model of a bipolar transistor.
+#[derive(Clone, Debug)]
+pub struct Bjt {
+    /// True for an NPN transistor.
+    pub npn: bool,
+    /// Forward current gain.
+    pub beta: f64,
+    /// Saturation current.
+    pub is: f64,
+    /// Forward voltage of the base-emitter junction.
+    pub vbe: f64,
+}
+
+/// The model of a field-effect transistor.
+#[derive(Clone, Debug)]
+pub struct Mosfet {
+    /// True for an N-channel transistor.
+    pub nch: bool,
+    /// Threshold voltage.
+    pub vto: f64,
+    /// Transconductance parameter.
+    pub kn: f64,
+}
+
+/// The model of an operational amplifier.
+#[derive(Clone, Debug)]
+pub struct OpAmp {
+    /// Open-loop gain.
+    pub gain: f64,
+    /// The rail on the positive side.
+    pub vdd: f64,
+    /// The rail on the negative side.
+    pub vss: f64,
+    /// Output resistance.
+    pub rout: f64,
+}
+
+/// The model of a comparator.
+#[derive(Clone, Debug)]
+pub struct Comparator {
+    /// The voltage the output flips at.
+    pub vth: f64,
+    /// The level of the output.
+    pub vdd: f64,
+    /// Output resistance.
+    pub rout: f64,
+}
+
+/// The model of a 555 timer.
+///
+/// The timer is a behavioural part: it watches the voltages on the trigger
+/// and the threshold and drives its output and its discharge pin.
+#[derive(Clone, Debug)]
+pub struct Timer555 {
+    /// The supply voltage.
+    pub vcc: f64,
+    /// Output resistance.
+    pub rout: f64,
 }
 
 /// A virtual instrument, the way Multisim puts them on the schematic.
@@ -568,6 +640,31 @@ impl Circuit {
                         return Err(format!("mcu pin `{}` needs one node", c.id));
                     }
                 }
+                ComponentKind::Bjt(_) => {
+                    if c.pins.len() != 3 {
+                        return Err(format!("transistor `{}` needs three pins", c.id));
+                    }
+                }
+                ComponentKind::Mosfet(_) => {
+                    if c.pins.len() != 3 {
+                        return Err(format!("transistor `{}` needs three pins", c.id));
+                    }
+                }
+                ComponentKind::OpAmp(_) => {
+                    if c.pins.len() != 3 {
+                        return Err(format!("amplifier `{}` needs three pins", c.id));
+                    }
+                }
+                ComponentKind::Comparator(_) => {
+                    if c.pins.len() != 3 {
+                        return Err(format!("comparator `{}` needs three pins", c.id));
+                    }
+                }
+                ComponentKind::Timer555(_) => {
+                    if c.pins.len() != 7 {
+                        return Err(format!("timer `{}` needs seven pins", c.id));
+                    }
+                }
                 ComponentKind::Instrument(inst) => {
                     if inst.channels.is_empty() {
                         return Err(format!("instrument `{}` has no channels", c.id));
@@ -722,6 +819,37 @@ impl Circuit {
                 ComponentKind::Instrument(inst) => {
                     m.insert("kind".into(), Json::Str("instrument".into()));
                     m.insert("instrument".into(), Json::Str(inst.kind.key().into()));
+                }
+                ComponentKind::Bjt(b) => {
+                    m.insert("kind".into(), Json::Str("bjt".into()));
+                    m.insert("npn".into(), Json::Bool(b.npn));
+                    m.insert("beta".into(), Json::Num(b.beta));
+                    m.insert("is".into(), Json::Num(b.is));
+                    m.insert("vbe".into(), Json::Num(b.vbe));
+                }
+                ComponentKind::Mosfet(f) => {
+                    m.insert("kind".into(), Json::Str("mosfet".into()));
+                    m.insert("nch".into(), Json::Bool(f.nch));
+                    m.insert("vto".into(), Json::Num(f.vto));
+                    m.insert("kn".into(), Json::Num(f.kn));
+                }
+                ComponentKind::OpAmp(o) => {
+                    m.insert("kind".into(), Json::Str("opamp".into()));
+                    m.insert("gain".into(), Json::Num(o.gain));
+                    m.insert("vdd".into(), Json::Num(o.vdd));
+                    m.insert("vss".into(), Json::Num(o.vss));
+                    m.insert("rout".into(), Json::Num(o.rout));
+                }
+                ComponentKind::Comparator(c) => {
+                    m.insert("kind".into(), Json::Str("comparator".into()));
+                    m.insert("vth".into(), Json::Num(c.vth));
+                    m.insert("vdd".into(), Json::Num(c.vdd));
+                    m.insert("rout".into(), Json::Num(c.rout));
+                }
+                ComponentKind::Timer555(t) => {
+                    m.insert("kind".into(), Json::Str("timer555".into()));
+                    m.insert("vcc".into(), Json::Num(t.vcc));
+                    m.insert("rout".into(), Json::Num(t.rout));
                 }
                 ComponentKind::Logic(l) => {
                     m.insert("kind".into(), Json::Str("ic_logic".into()));
@@ -920,6 +1048,32 @@ fn parse_component(v: &Json) -> Result<Component, String> {
             })
         }
         "mcu_pin" | "pin" | "mcupin" => ComponentKind::McuPin,
+        "bjt" => ComponentKind::Bjt(Bjt {
+            npn: b(&["npn", "n"], true),
+            beta: n(&["beta", "hfe"], 100.0),
+            is: n(&["is", "saturation"], 1e-14),
+            vbe: n(&["vbe"], 0.7),
+        }),
+        "mosfet" => ComponentKind::Mosfet(Mosfet {
+            nch: b(&["nch", "n"], true),
+            vto: n(&["vto", "threshold"], 2.0),
+            kn: n(&["kn", "beta"], 1e-3),
+        }),
+        "opamp" => ComponentKind::OpAmp(OpAmp {
+            gain: n(&["gain"], 1e5),
+            vdd: n(&["vdd", "supply"], 15.0),
+            vss: n(&["vss"], -15.0),
+            rout: n(&["rout", "output_resistance"], 100.0),
+        }),
+        "comparator" => ComponentKind::Comparator(Comparator {
+            vth: n(&["vth", "threshold"], 0.0),
+            vdd: n(&["vdd", "supply"], 5.0),
+            rout: n(&["rout", "output_resistance"], 100.0),
+        }),
+        "timer555" | "timer" => ComponentKind::Timer555(Timer555 {
+            vcc: n(&["vcc", "supply"], 5.0),
+            rout: n(&["rout", "output_resistance"], 100.0),
+        }),
         "instrument" => {
             let kind = v
                 .get("instrument")
@@ -944,6 +1098,7 @@ fn parse_component(v: &Json) -> Result<Component, String> {
                 r: n(&["r", "rout", "output_resistance"], 50.0),
                 n_in: n(&["n_in", "inputs"], 2.0) as usize,
                 sel_bits: n(&["sel_bits", "select"], 0.0) as usize,
+                has_enable: v.get("has_enable").and_then(|x| x.as_bool()).unwrap_or(false),
             })
         }
         "ic_seq" | "catalogue_seq" => {

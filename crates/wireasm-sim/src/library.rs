@@ -124,6 +124,10 @@ pub enum Func {
     Shift8,
     /// Four-to-sixteen decoder.
     Decoder4to16,
+    /// Three-to-eight decoder: three address inputs, eight outputs.
+    Decoder3to8,
+    /// Eight-to-three priority encoder.
+    Encoder8to3,
 }
 
 impl Func {
@@ -156,6 +160,8 @@ impl Func {
             Func::BcdCounter => "bcd_counter",
             Func::Shift8 => "shift8",
             Func::Decoder4to16 => "decoder4to16",
+            Func::Decoder3to8 => "decoder3to8",
+            Func::Encoder8to3 => "encoder8to3",
         }
     }
 
@@ -188,6 +194,8 @@ impl Func {
             Func::BcdCounter,
             Func::Shift8,
             Func::Decoder4to16,
+            Func::Decoder3to8,
+            Func::Encoder8to3,
         ];
         ALL.iter().copied().find(|f| f.key() == key.trim())
     }
@@ -225,6 +233,11 @@ pub struct Unit {
     pub ins: Vec<String>,
     /// Signal names of the outputs, e.g. `1Y`.
     pub outs: Vec<String>,
+    /// How many of the inputs select the data input of a multiplexer.
+    /// `None` means the function does not need select lines.
+    pub sel_bits: Option<u8>,
+    /// Whether the unit has an enable input.
+    pub has_enable: bool,
 }
 
 impl Unit {
@@ -233,6 +246,22 @@ impl Unit {
             func,
             ins: ins.iter().map(|s| s.to_string()).collect(),
             outs: outs.iter().map(|s| s.to_string()).collect(),
+            sel_bits: None,
+            has_enable: false,
+        }
+    }
+
+    /// A unit that selects one of its data inputs.
+    ///
+    /// `sel_bits` says how many lines carry the address, `enable` says
+    /// whether the last input enables the unit.
+    pub fn mux(func: Func, ins: &[&str], outs: &[&str], sel_bits: u8, enable: bool) -> Unit {
+        Unit {
+            func,
+            ins: ins.iter().map(|s| s.to_string()).collect(),
+            outs: outs.iter().map(|s| s.to_string()).collect(),
+            sel_bits: Some(sel_bits),
+            has_enable: enable,
         }
     }
 }
@@ -299,6 +328,80 @@ pub struct Entry {
     pub power: Power,
     /// Supply current draw in milliamperes, for the parts that have one.
     pub ma: Option<f64>,
+    /// The device the part is, when it is not made of logic units.
+    pub device: Option<Device>,
+}
+
+/// A part that is not made of logic units: a diode, a transistor, an
+/// amplifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Device {
+    Diode,
+    Led,
+    Zener,
+    /// A bipolar transistor.
+    Bjt { npn: bool },
+    /// A field-effect transistor.
+    Mosfet { nch: bool },
+    /// An operational amplifier.
+    OpAmp,
+    /// A comparator.
+    Comparator,
+    /// The 555 timer.
+    Timer555,
+}
+
+impl Device {
+    pub fn key(self) -> &'static str {
+        match self {
+            Device::Diode => "diode",
+            Device::Led => "led",
+            Device::Zener => "zener",
+            Device::Bjt { npn: true } => "npn",
+            Device::Bjt { npn: false } => "pnp",
+            Device::Mosfet { nch: true } => "nmfet",
+            Device::Mosfet { nch: false } => "pmfet",
+            Device::OpAmp => "opamp",
+            Device::Comparator => "comparator",
+            Device::Timer555 => "timer555",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Device> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "diode" => Some(Device::Diode),
+            "led" => Some(Device::Led),
+            "zener" => Some(Device::Zener),
+            "npn" => Some(Device::Bjt { npn: true }),
+            "pnp" => Some(Device::Bjt { npn: false }),
+            "nmfet" => Some(Device::Mosfet { nch: true }),
+            "pmfet" => Some(Device::Mosfet { nch: false }),
+            "opamp" => Some(Device::OpAmp),
+            "comparator" => Some(Device::Comparator),
+            "timer555" => Some(Device::Timer555),
+            _ => None,
+        }
+    }
+
+    /// The names of the pins, in the order the solver expects them.
+    pub fn pin_names(self) -> Vec<String> {
+        match self {
+            Device::Bjt { .. } => vec!["B".into(), "C".into(), "E".into()],
+            Device::Mosfet { .. } => vec!["G".into(), "D".into(), "S".into()],
+            Device::OpAmp => vec!["IN+".into(), "IN-".into(), "OUT".into()],
+            Device::Comparator => vec!["IN+".into(), "IN-".into(), "OUT".into()],
+            Device::Timer555 => vec![
+                "GND".into(),
+                "TRIG".into(),
+                "THR".into(),
+                "OUT".into(),
+                "DISCH".into(),
+                "CTRL".into(),
+                "VCC".into(),
+            ],
+            _ => vec!["A".into(), "K".into()],
+        }
+    }
 }
 
 impl Entry {
@@ -486,6 +589,12 @@ fn entry_to_json(e: &Entry) -> Json {
         .map(|u| {
             let mut um = std::collections::BTreeMap::new();
             um.insert("func".into(), Json::Str(u.func.key().into()));
+            if let Some(bits) = u.sel_bits {
+                um.insert("selBits".into(), Json::Num(bits as f64));
+            }
+            if u.has_enable {
+                um.insert("enable".into(), Json::Bool(true));
+            }
             um.insert(
                 "ins".into(),
                 Json::Arr(u.ins.iter().map(|s| Json::Str(s.clone())).collect()),
@@ -519,6 +628,9 @@ fn entry_to_json(e: &Entry) -> Json {
     if let Some(ma) = e.ma {
         m.insert("ma".into(), Json::Num(ma));
     }
+    if let Some(device) = e.device {
+        m.insert("device".into(), Json::Str(device.key().into()));
+    }
     Json::Obj(m)
 }
 
@@ -543,7 +655,13 @@ fn entry_from_json(v: &Json) -> Result<Entry, String> {
                 .ok_or_else(|| format!("component `{key}` has an unknown function"))?;
             let ins = string_list(item.get("ins"));
             let outs = string_list(item.get("outs"));
-            units.push(Unit { func, ins, outs });
+            units.push(Unit {
+                func,
+                ins,
+                outs,
+                sel_bits: item.get("selBits").and_then(|x| x.as_u64()).map(|v| v as u8),
+                has_enable: item.get("enable").and_then(|x| x.as_bool()).unwrap_or(false),
+            });
         }
     }
     let mut dip = Vec::new();
@@ -593,6 +711,10 @@ fn entry_from_json(v: &Json) -> Result<Entry, String> {
         dip,
         power,
         ma: v.get("ma").and_then(|x| x.as_f64()),
+        device: v
+            .get("device")
+            .and_then(|x| x.as_str())
+            .and_then(Device::from_key),
     })
 }
 
@@ -672,20 +794,20 @@ mod tests {
     #[test]
     fn units_match_their_pins() {
         let lib = builtin();
+        let mut missing: Vec<String> = Vec::new();
         for e in &lib.entries {
             if e.units.is_empty() {
                 continue;
             }
             for u in &e.units {
                 for name in u.ins.iter().chain(u.outs.iter()) {
-                    assert!(
-                        e.dip.iter().any(|(_, n)| n == name),
-                        "{}: signal {name} has no pin",
-                        e.key
-                    );
+                    if !e.dip.iter().any(|(_, n)| n == name) {
+                        missing.push(format!("{}: {name}", e.key));
+                    }
                 }
             }
         }
+        assert!(missing.is_empty(), "signals without a pin: {missing:?}");
     }
 
     #[test]
@@ -715,6 +837,7 @@ mod tests {
             ],
             power: Power::ttl(),
             ma: None,
+            device: None,
         });
         let text = lib.to_json_value().stringify_pretty();
         let back = Library::from_json_value(&Json::parse(&text).unwrap()).unwrap();

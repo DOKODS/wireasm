@@ -119,6 +119,20 @@ pub struct DragPart {
     pub moved: bool,
 }
 
+/// A wire that is being reshaped.
+#[derive(Clone, Copy, Debug)]
+pub struct DragWire {
+    /// The wire.
+    pub index: usize,
+    /// The bend that is dragged. `None` means the wire has no bends yet and
+    /// the first one is being created.
+    pub point: Option<usize>,
+    /// Where the pointer was when the drag started.
+    pub grab: Vec2,
+    /// Whether the pointer has moved far enough to make a bend.
+    pub moved: bool,
+}
+
 /// The editor state around a [`Schematic`] document.
 pub struct CircuitDoc {
     pub model: Schematic,
@@ -135,6 +149,9 @@ pub struct CircuitDoc {
     pub selected: Option<Sel>,
     pub pending: Option<PinAddr>,
     pub drag: Option<DragPart>,
+    /// The wire that is being reshaped: the wire and the bend that is
+    /// dragged.
+    pub drag_wire: Option<DragWire>,
     pub panning: bool,
     pub fit_requested: bool,
     pub rect: Rect,
@@ -159,6 +176,7 @@ impl Default for CircuitDoc {
             selected: None,
             pending: None,
             drag: None,
+            drag_wire: None,
             panning: false,
             fit_requested: true,
             rect: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
@@ -299,6 +317,7 @@ impl WireStudio {
         part.catalog = Some(entry.key.clone());
         part.catalog_units = entry.units.clone();
         part.catalog_power = Some(entry.power.clone());
+        part.catalog_device = entry.device;
         self.circuit.model.parts.push(part);
         let idx = self.circuit.model.parts.len() - 1;
         self.circuit.selected = Some(Sel::Part(idx));
@@ -468,6 +487,10 @@ impl WireStudio {
         let lang = self.lang;
         let s = |k: &str| t(lang, k);
         ui.heading(s("circuit.inspector"));
+        if let Some(Sel::Wire(idx)) = self.circuit.selected {
+            self.wire_properties(ui, idx);
+            return;
+        }
         let Some(Sel::Part(idx)) = self.circuit.selected else {
             ui.label(RichText::new(s("circuit.no_selection")).weak());
             return;
@@ -769,6 +792,75 @@ impl WireStudio {
             if ui.button(s("circuit.delete")).clicked() {
                 self.circuit.selected = Some(Sel::Part(idx));
                 self.circuit_delete_selected();
+            }
+        });
+    }
+
+    /// The properties of the selected wire: its name, its colour and the
+    /// bends it has.
+    fn wire_properties(&mut self, ui: &mut egui::Ui, index: usize) {
+        let lang = self.lang;
+        let s = |k: &str| t(lang, k);
+        let Some(wire) = self.circuit.model.wires.get(index).cloned() else {
+            return;
+        };
+        ui.label(RichText::new(s("circuit.wire")).strong());
+
+        ui.horizontal(|ui| {
+            ui.label(s("circuit.name"));
+            let mut name = wire.name.clone();
+            if ui
+                .add(egui::TextEdit::singleline(&mut name).desired_width(110.0))
+                .changed()
+            {
+                if let Some(w) = self.circuit.model.wires.get_mut(index) {
+                    w.name = name;
+                    self.circuit.dirty = true;
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(s("circuit.wire_color"));
+            let current = wire.color.unwrap_or([176, 32, 32]);
+            let mut rgb = [
+                current[0] as f32 / 255.0,
+                current[1] as f32 / 255.0,
+                current[2] as f32 / 255.0,
+            ];
+            if ui.color_edit_button_rgb(&mut rgb).changed() {
+                if let Some(w) = self.circuit.model.wires.get_mut(index) {
+                    w.color = Some([
+                        (rgb[0] * 255.0).round() as u8,
+                        (rgb[1] * 255.0).round() as u8,
+                        (rgb[2] * 255.0).round() as u8,
+                    ]);
+                    self.circuit.dirty = true;
+                }
+            }
+            if ui.button(s("circuit.wire_color_reset")).clicked() {
+                if let Some(w) = self.circuit.model.wires.get_mut(index) {
+                    w.color = None;
+                    self.circuit.dirty = true;
+                }
+            }
+        });
+
+        ui.label(
+            RichText::new(format!("{}: {}", s("circuit.wire_bends"), wire.points.len())).weak(),
+        );
+        ui.horizontal(|ui| {
+            if ui.button(s("circuit.wire_straight")).clicked() {
+                if let Some(w) = self.circuit.model.wires.get_mut(index) {
+                    w.points.clear();
+                    self.circuit.dirty = true;
+                }
+            }
+            if ui.button(s("circuit.wire_delete")).clicked() && index < self.circuit.model.wires.len()
+            {
+                self.circuit.model.wires.remove(index);
+                self.circuit.selected = None;
+                self.circuit.dirty = true;
             }
         });
     }
@@ -1185,13 +1277,17 @@ impl WireStudio {
             self.circuit_fit(rect);
             self.circuit.fit_requested = false;
         }
-        painter.rect_filled(rect, 0.0, sheet::SHEET);
-        sheet::draw_grid(
-            &painter,
-            rect,
-            self.circuit.view.zoom,
-            self.circuit.view.pan,
-        );
+        let style = self.sheet_style();
+        painter.rect_filled(rect, 0.0, style.sheet());
+        if self.show_grid() {
+            sheet::draw_grid(
+                &painter,
+                rect,
+                self.circuit.view.zoom,
+                self.circuit.view.pan,
+                style,
+            );
+        }
 
         for (i, w) in self.circuit.model.wires.iter().enumerate() {
             let a = self.circuit.model.pin_pos(w.a.part, &w.a.pin);
@@ -1200,9 +1296,11 @@ impl WireStudio {
             let color = if selected {
                 sheet::WIRE_SEL
             } else {
-                sheet::WIRE
+                w.color
+                    .map(|c| Color32::from_rgb(c[0], c[1], c[2]))
+                    .unwrap_or_else(|| style.wire())
             };
-            let points = elbow(a, b);
+            let points = wire_route(a, b, &w.points);
             for pair in points.windows(2) {
                 painter.line_segment(
                     [
@@ -1214,6 +1312,38 @@ impl WireStudio {
             }
         }
 
+        // The bends of a wire are shown as small squares, so it is clear
+        // that they can be dragged.
+        for (i, w) in self.circuit.model.wires.iter().enumerate() {
+            if w.points.is_empty() {
+                continue;
+            }
+            // The bends are shown for the wire that is picked, the way
+            // Multisim marks the points a wire can be dragged by.
+            let selected = self.circuit.selected == Some(Sel::Wire(i));
+            if !selected {
+                continue;
+            }
+            let color = if selected {
+                sheet::WIRE_SEL
+            } else {
+                w.color
+                    .map(|c| Color32::from_rgb(c[0], c[1], c[2]))
+                    .unwrap_or_else(|| style.wire())
+            };
+            for point in &w.points {
+                let screen = self.circuit.view.w2s(rect, Pos2::new(point.x, point.y));
+                painter.rect_filled(
+                    Rect::from_center_size(
+                        screen,
+                        Vec2::splat(5.0 * self.circuit.view.zoom.max(0.6)),
+                    ),
+                    1.0,
+                    color,
+                );
+            }
+        }
+
         // A dot wherever three or more wires meet, the way Multisim marks a
         // junction.
         for junction in self.junctions() {
@@ -1221,18 +1351,22 @@ impl WireStudio {
                 &painter,
                 self.circuit.view.w2s(rect, junction),
                 self.circuit.view.zoom,
+                style,
             );
         }
 
         // The number of every net, printed next to its wire.
-        for (number, (name, at)) in self.node_numbers().into_iter().enumerate() {
-            let _ = name;
-            sheet::draw_node_number(
-                &painter,
-                self.circuit.view.w2s(rect, at),
-                &number.to_string(),
-                self.circuit.view.zoom,
-            );
+        if self.show_node_numbers() {
+            for (number, (name, at)) in self.node_numbers().into_iter().enumerate() {
+                let _ = name;
+                sheet::draw_node_number(
+                    &painter,
+                    self.circuit.view.w2s(rect, at),
+                    &number.to_string(),
+                    self.circuit.view.zoom,
+                    style,
+                );
+            }
         }
 
         for i in 0..self.circuit.model.parts.len() {
@@ -1317,6 +1451,7 @@ impl WireStudio {
             return;
         };
         let part = part.clone();
+        let style = self.sheet_style();
         let pins: Vec<(String, Pos2)> = part
             .pins()
             .into_iter()
@@ -1335,6 +1470,7 @@ impl WireStudio {
             w2s: &w2s,
             zoom: self.circuit.view.zoom,
             selected,
+            style,
         };
         crate::symbols::draw(&ctx);
 
@@ -1344,10 +1480,15 @@ impl WireStudio {
         } else {
             part.caption()
         };
-        let half = match part.kind {
-            PartKind::Ground => 14.0,
-            PartKind::Gate => 20.0,
-            _ => PART_H * 0.5,
+        let half = if part.catalog_device.is_some() {
+            let body = self.circuit.model.body_rect(index);
+            (body.height() * 0.5).max(PART_H * 0.5)
+        } else {
+            match part.kind {
+                PartKind::Ground => 14.0,
+                PartKind::Gate => 20.0,
+                _ => PART_H * 0.5,
+            }
         };
         let anchor = self.circuit.view.w2s(rect, Pos2::new(part.x, part.y));
         sheet::draw_label(
@@ -1357,6 +1498,7 @@ impl WireStudio {
             &value,
             self.circuit.view.zoom,
             half,
+            style,
         );
     }
 
@@ -1378,6 +1520,28 @@ impl WireStudio {
             }
         }
         out
+    }
+
+    /// The bend of a wire that the pointer sits on, if there is one.
+    fn grab_wire_bend(&self, wire: usize, world: Pos2) -> Option<DragWire> {
+        let w = self.circuit.model.wires.get(wire)?;
+        for (index, point) in w.points.iter().enumerate() {
+            let at = Pos2::new(point.x, point.y);
+            if (at - world).length() < 10.0 {
+                return Some(DragWire {
+                    index: wire,
+                    point: Some(index),
+                    grab: world.to_vec2(),
+                    moved: true,
+                });
+            }
+        }
+        Some(DragWire {
+            index: wire,
+            point: None,
+            grab: world.to_vec2(),
+            moved: false,
+        })
     }
 
     /// The points where three or more wire ends meet: a junction gets a dot.
@@ -1532,6 +1696,9 @@ impl WireStudio {
                     } else if let Some(w) = self.circuit.model.hit_wire(world) {
                         self.circuit.selected = Some(Sel::Wire(w));
                         self.circuit.drag = None;
+                        // Grab a bend of the wire, or start a new one where
+                        // the pointer sits on the wire.
+                        self.circuit.drag_wire = self.grab_wire_bend(w, world);
                     } else {
                         self.circuit.selected = None;
                         self.circuit.pending = None;
@@ -1542,7 +1709,41 @@ impl WireStudio {
         }
 
         if primary_down {
-            if let Some(mut drag) = self.circuit.drag {
+            if let Some(mut drag) = self.circuit.drag_wire {
+                if let Some(p) = pos {
+                    let world = self.circuit.view.s2w(rect, p);
+                    // A bend only appears when the pointer really moves, so
+                    // that a simple click on a wire does not bend it.
+                    if !drag.moved && (world - drag.grab.to_pos2()).length() < 4.0 {
+                        self.circuit.drag_wire = Some(drag);
+                    } else {
+                        drag.moved = true;
+                        let target = world.to_vec2();
+                        let nx = (target.x / 10.0).round() * 10.0;
+                        let ny = (target.y / 10.0).round() * 10.0;
+                        if let Some(w) = self.circuit.model.wires.get_mut(drag.index) {
+                            match drag.point {
+                                Some(index) => {
+                                    if let Some(point) = w.points.get_mut(index) {
+                                        point.x = nx;
+                                        point.y = ny;
+                                    }
+                                }
+                                None => {
+                                    // A new bend appears where the pointer is.
+                                    w.points.push(wireasm_sim::schematic::WirePoint {
+                                        x: nx,
+                                        y: ny,
+                                    });
+                                    drag.point = Some(w.points.len() - 1);
+                                }
+                            }
+                            self.circuit.dirty = true;
+                        }
+                        self.circuit.drag_wire = Some(drag);
+                    }
+                }
+            } else if let Some(mut drag) = self.circuit.drag {
                 if let Some(p) = pos {
                     let world = self.circuit.view.s2w(rect, p);
                     let target = world.to_vec2() - drag.grab;
@@ -1565,6 +1766,7 @@ impl WireStudio {
 
         if primary_released {
             self.circuit.drag = None;
+            self.circuit.drag_wire = None;
             self.circuit.panning = false;
         }
     }
@@ -1866,6 +2068,24 @@ impl CircuitGeometry for Schematic {
         let Some(p) = self.parts.get(part) else {
             return Rect::from_min_size(Pos2::ZERO, Vec2::ZERO);
         };
+        if p.catalog_device.is_some() {
+            // The body of a device covers its pins.
+            let mut min = Pos2::new(f32::MAX, f32::MAX);
+            let mut max = Pos2::new(f32::MIN, f32::MIN);
+            for pin in p.pins() {
+                let (dx, dy) = self.pin_offset(part, &pin);
+                let at = Pos2::new(p.x + dx, p.y + dy);
+                min = min.min(at);
+                max = max.max(at);
+            }
+            if min.x > max.x {
+                return Rect::from_center_size(
+                    Pos2::new(p.x, p.y),
+                    Vec2::new(PART_W, PART_H),
+                );
+            }
+            return Rect::from_min_max(min, max).expand(8.0);
+        }
         if p.is_catalog() {
             let half = Vec2::new(
                 wireasm_sim::schematic::CATALOG_W * 0.5,
@@ -1903,9 +2123,12 @@ impl CircuitGeometry for Schematic {
         for (i, w) in self.wires.iter().enumerate() {
             let a = self.pin_pos(w.a.part, &w.a.pin);
             let b = self.pin_pos(w.b.part, &w.b.pin);
-            let d = distance_to_segment(world, a, b);
-            if d < 8.0 && best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
-                best = Some((d, i));
+            let route = wire_route(a, b, &w.points);
+            for pair in route.windows(2) {
+                let d = distance_to_segment(world, pair[0], pair[1]);
+                if d < 8.0 && best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
+                    best = Some((d, i));
+                }
             }
         }
         best.map(|(_, i)| i)
@@ -1919,14 +2142,40 @@ pub fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 
 /// Route a wire as three straight segments, the way schematics are drawn:
 /// out of one pin, across, and into the other.
-/// The route of a wire: Multisim leaves a pin horizontally, turns by ninety
-/// degrees and enters the next pin horizontally.
-fn elbow(a: Pos2, b: Pos2) -> Vec<Pos2> {
-    if (a.x - b.x).abs() < 0.5 || (a.y - b.y).abs() < 0.5 {
-        return vec![a, b];
+/// The route of a wire.
+///
+/// Without points a wire leaves the first pin horizontally, turns once and
+/// enters the second pin horizontally. With points the wire goes through them,
+/// which is what dragging a bend in Multisim produces.
+pub fn wire_route(a: Pos2, b: Pos2, points: &[wireasm_sim::schematic::WirePoint]) -> Vec<Pos2> {
+    if points.is_empty() {
+        if (a.x - b.x).abs() < 0.5 || (a.y - b.y).abs() < 0.5 {
+            return vec![a, b];
+        }
+        let mid = (a.x + b.x) * 0.5;
+        return vec![a, Pos2::new(mid, a.y), Pos2::new(mid, b.y), b];
     }
-    let mid = (a.x + b.x) * 0.5;
-    vec![a, Pos2::new(mid, a.y), Pos2::new(mid, b.y), b]
+    let mut out = Vec::new();
+    let mut cur = a;
+    for p in points {
+        let p = Pos2::new(p.x, p.y);
+        // Leave horizontally, then turn.
+        if (p.x - cur.x).abs() > 0.5 {
+            out.push(Pos2::new(p.x, cur.y));
+        }
+        if (p.y - cur.y).abs() > 0.5 {
+            out.push(p);
+        }
+        cur = p;
+    }
+    // Enter the last pin horizontally.
+    if (b.y - cur.y).abs() > 0.5 {
+        out.push(Pos2::new(cur.x, b.y));
+    }
+    if (b.x - cur.x).abs() > 0.5 {
+        out.push(b);
+    }
+    out
 }
 
 #[cfg(test)]

@@ -3,6 +3,52 @@
 All notable changes to WireASM and WireStudio are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] — 2026-11-13
+
+### Added
+
+- A Parameters tab in the toolbar and in the View menu. It holds the theme,
+  the zoom of the interface, the size of the code font, the line numbers,
+  the look of the sheet, the grid, the node numbers, the opening of the
+  instrument panels, the step and the length of the transient analysis, the
+  language and the export folder. The values are stored in the settings file
+  and survive a restart.
+- Wires have properties: a name, a colour of their own and a shape. Drag a
+  wire to put a bend in it, drag the bend to move it, straighten the wire or
+  delete it from the inspector.
+- Transistors, amplifiers, comparators and the 555 timer are simulated as
+  themselves. A catalogue transistor no longer turns into a logic gate: the
+  netlist carries a bipolar or a field-effect transistor, an operational
+  amplifier, a comparator or a timer, and the solver keeps their state
+  between the iterations.
+- GOST symbols for the new parts: the bipolar transistor (ГОСТ 2.741), the
+  field-effect transistor (2.742), the amplifier and the comparator as a
+  triangle, the timer as a box with its pins named.
+- The catalogue grew from 133 to 197 parts. Added were the TTL flip-flops,
+  counters, registers, multiplexers and decoders, the 74LS and 74HC
+  sequential parts, more CD4000 and more ECL.
+- Multiplexers of the catalogue select their data input properly: the
+  address lines and the enable are declared with the unit, so an 8-to-1
+  multiplexer reads its address instead of its data.
+
+### Fixed
+
+- The code editor no longer panics on a Russian comment: the lexer walked
+  the text byte by byte and cut a code point in half.
+- A click on a wire no longer bends it: the bend appears when the pointer
+  really moves.
+- The bends of a wire are shown only for the wire that is picked, and they
+  snap to the grid.
+- The theme of the interface reaches the panels and the background, not only
+  the widgets.
+- The file name and the zoom of the toolbar no longer overlap each other.
+- The zoom in the toolbar follows the schematic when the circuit is open.
+- The names of the pins of the 555 timer no longer fall out of its body.
+
+### Changed
+
+- The README lists the new parts and the Parameters tab.
+
 ## [0.4.2] — 2026-11-12
 
 ### Added

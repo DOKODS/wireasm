@@ -29,7 +29,21 @@ fn part(
         dip: dip.into_iter().map(|(n, s)| (n, s.to_string())).collect(),
         power,
         ma: None,
+        device: None,
     }
+}
+
+/// A part that is one device rather than a set of logic units.
+fn device_part(
+    key: &str,
+    title: &str,
+    family: Family,
+    prefix: &str,
+    device: crate::library::Device,
+) -> Entry {
+    let mut entry = part(key, title, family, prefix, vec![], vec![], Power::default());
+    entry.device = Some(device);
+    entry
 }
 
 /// Input names of one unit of a gate: `1A`, `1B`, … for the first input and
@@ -50,6 +64,8 @@ fn repeated(count: usize, func: Func, ins: usize) -> Vec<Unit> {
                 func,
                 ins: inputs,
                 outs: vec![format!("{n}Y")],
+                sel_bits: None,
+                has_enable: false,
             }
         })
         .collect()
@@ -62,6 +78,8 @@ fn simple(count: usize, func: Func) -> Vec<Unit> {
             func,
             ins: vec![format!("{n}A")],
             outs: vec![format!("{n}Y")],
+            sel_bits: None,
+            has_enable: false,
         })
         .collect()
 }
@@ -250,24 +268,67 @@ fn dip16_triple_jk() -> Vec<(u8, &'static str)> {
     ]
 }
 
+/// 16-pin DIP with a dual five-bit comparator.
+fn dip16_comparator() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "A0"),
+        (2, "A1"),
+        (3, "A2"),
+        (4, "A3"),
+        (5, "A4"),
+        (6, "B0"),
+        (7, "B1"),
+        (8, "B2"),
+        (9, "B3"),
+        (10, "B4"),
+        (11, "EQ"),
+        (12, "GT"),
+        (13, "LT"),
+        (14, "GND"),
+        (15, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with three JK flip-flops, each with its own clock.
+fn dip16_triple_jk3() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1J"),
+        (2, "1CLK"),
+        (3, "1K"),
+        (4, "1Q"),
+        (5, "1Q̄"),
+        (6, "2J"),
+        (7, "2CLK"),
+        (8, "2K"),
+        (9, "2Q"),
+        (10, "2Q̄"),
+        (11, "3J"),
+        (12, "3CLK"),
+        (13, "3K"),
+        (14, "3Q"),
+        (15, "3Q̄"),
+        (16, "GND"),
+    ]
+}
+
 /// 16-pin DIP with an 8-to-1 multiplexer: the 74151 family.
 fn dip16_mux8() -> Vec<(u8, &'static str)> {
     vec![
-        (1, "EN"),
-        (2, "I0"),
+        (1, "I3"),
+        (2, "I2"),
         (3, "I1"),
-        (4, "I2"),
-        (5, "I3"),
-        (6, "I4"),
-        (7, "I5"),
-        (8, "I6"),
-        (9, "I7"),
-        (10, "SEL"),
-        (11, "Y"),
-        (12, "Ȳ"),
-        (13, "GND"),
-        (14, "Y"),
-        (15, "GND"),
+        (4, "I0"),
+        (5, "Y"),
+        (6, "Ȳ"),
+        (7, "EN"),
+        (8, "GND"),
+        (9, "S2"),
+        (10, "S1"),
+        (11, "S0"),
+        (12, "I7"),
+        (13, "I6"),
+        (14, "I5"),
+        (15, "I4"),
         (16, "VCC"),
     ]
 }
@@ -479,104 +540,78 @@ pub fn basic() -> Vec<Entry> {
 
 /// Diodes and transistors.
 pub fn discrete() -> Vec<Entry> {
-    let plain = Power::default();
+    use crate::library::Device;
     vec![
-        part(
-            "diode",
-            "Diode",
-            Family::Discrete,
-            "D",
-            vec![],
-            vec![],
-            plain.clone(),
-        ),
-        part(
+        device_part("diode", "Diode", Family::Discrete, "D", Device::Diode),
+        device_part(
             "led",
             "Light-emitting diode",
             Family::Discrete,
             "LED",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Led,
         ),
-        part(
+        device_part(
             "zener",
             "Zener diode",
             Family::Discrete,
             "D",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Zener,
         ),
-        part(
+        device_part(
             "npn",
             "NPN transistor",
             Family::Discrete,
             "Q",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Bjt { npn: true },
         ),
-        part(
+        device_part(
             "pnp",
             "PNP transistor",
             Family::Discrete,
             "Q",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Bjt { npn: false },
         ),
-        part(
+        device_part(
             "nmfet",
             "N-channel MOSFET",
             Family::Discrete,
             "Q",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Mosfet { nch: true },
         ),
-        part(
+        device_part(
             "pmfet",
             "P-channel MOSFET",
             Family::Discrete,
             "Q",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Mosfet { nch: false },
         ),
     ]
 }
 
 /// Amplifiers, comparators and timers.
 pub fn analog() -> Vec<Entry> {
-    let plain = Power::default();
+    use crate::library::Device;
     vec![
-        part(
+        device_part(
             "opamp",
             "Operational amplifier",
             Family::Analog,
             "U",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::OpAmp,
         ),
-        part(
+        device_part(
             "comparator",
             "Comparator",
             Family::Analog,
             "U",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Comparator,
         ),
-        part(
+        device_part(
             "timer555",
             "Timer 555",
             Family::Analog,
             "U",
-            vec![],
-            vec![],
-            plain.clone(),
+            Device::Timer555,
         ),
     ]
 }
@@ -780,10 +815,14 @@ pub fn ttl() -> Vec<Entry> {
         "8-to-1 multiplexer",
         Family::Ttl,
         "U",
-        vec![Unit::new(
+        vec![Unit::mux(
             Func::Mux2,
-            &["I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "SEL", "EN"],
+            &[
+                "I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "S0", "S1", "S2", "EN",
+            ],
             &["Y", "Ȳ"],
+            3,
+            true,
         )],
         dip16_mux8(),
         p.clone(),
@@ -812,6 +851,125 @@ pub fn ttl() -> Vec<Entry> {
             &["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"],
         )],
         dip14_shift8(),
+        p.clone(),
+    ));
+
+    // Multiplexers, decoders and the rest of the counters.
+    out.push(part(
+        "74148",
+        "8-to-3 priority encoder",
+        Family::Ttl,
+        "U",
+        vec![Unit::new(
+            Func::Encoder8to3,
+            &["1", "2", "3", "4", "5", "6", "7", "8"],
+            &["A0", "A1", "A2"],
+        )],
+        dip16_encoder8(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74153",
+        "Dual 4-to-1 multiplexer",
+        Family::Ttl,
+        "U",
+        vec![
+            Unit::mux(
+                Func::Mux2,
+                &["1C0", "1C1", "1C2", "1C3", "1S0", "1S1"],
+                &["1Y"],
+                2,
+                false,
+            ),
+            Unit::mux(
+                Func::Mux2,
+                &["2C0", "2C1", "2C2", "2C3", "2S0", "2S1"],
+                &["2Y"],
+                2,
+                false,
+            ),
+        ],
+        dip16_mux4(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74157",
+        "Quad 2-to-1 multiplexer",
+        Family::Ttl,
+        "U",
+        vec![
+            Unit::mux(Func::Mux2, &["1A", "1B", "1S"], &["1Y"], 1, false),
+            Unit::mux(Func::Mux2, &["2A", "2B", "2S"], &["2Y"], 1, false),
+            Unit::mux(Func::Mux2, &["3A", "3B", "3S"], &["3Y"], 1, false),
+            Unit::mux(Func::Mux2, &["4A", "4B", "4S"], &["4Y"], 1, false),
+        ],
+        dip16_mux2(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74138",
+        "3-to-8 decoder",
+        Family::Ttl,
+        "U",
+        vec![Unit::new(
+            Func::Decoder3to8,
+            &["A", "B", "C", "EN"],
+            &["Y0", "Y1", "Y2", "Y3", "Y4", "Y5", "Y6", "Y7"],
+        )],
+        dip16_decoder(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74139",
+        "Dual 2-to-4 decoder",
+        Family::Ttl,
+        "U",
+        vec![Unit::new(
+            Func::Decoder4to16,
+            &["A", "B", "EN", "E1"],
+            &["Y0", "Y1", "Y2", "Y3"],
+        )],
+        dip16_decoder(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74174",
+        "Quad D flip-flop",
+        Family::Ttl,
+        "U",
+        vec![
+            Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+            Unit::new(Func::Dff, &["2D", "1CLK"], &["2Q", "2Q̄"]),
+            Unit::new(Func::Dff, &["3D", "3CLK"], &["3Q", "3Q̄"]),
+            Unit::new(Func::Dff, &["4D", "3CLK"], &["4Q", "4Q̄"]),
+        ],
+        dip16_quad_dff(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74193",
+        "4-bit binary up/down counter",
+        Family::Ttl,
+        "U",
+        vec![Unit::new(
+            Func::Counter4Down,
+            &["CLK", "CLR", "UP", "DOWN"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_counter_updown(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74194",
+        "4-bit bidirectional shift register",
+        Family::Ttl,
+        "U",
+        vec![Unit::new(
+            Func::Shift8,
+            &["CLK", "SI", "SR", "SL", "S0", "S1"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_shift4(),
         p.clone(),
     ));
     out
@@ -892,6 +1050,204 @@ pub fn ttl_shottky() -> Vec<Entry> {
         p.clone(),
     ));
 
+    // The 74LS flip-flops, counters and registers.
+    out.push(part(
+        "74LS74",
+        "Dual D flip-flop, preset, clear",
+        Family::TtlSchottky,
+        "U",
+        vec![
+            Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+            Unit::new(Func::Dff, &["2D", "2CLK"], &["2Q", "2Q̄"]),
+        ],
+        dip16_dual_dff(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS76",
+        "Dual JK flip-flop, preset, clear",
+        Family::TtlSchottky,
+        "U",
+        vec![
+            Unit::new(Func::Jk, &["1J", "1K", "1CLK"], &["1Q", "1Q̄"]),
+            Unit::new(Func::Jk, &["2J", "2K", "2CLK"], &["2Q", "2Q̄"]),
+        ],
+        dip16_dual_jk(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS90",
+        "Decade counter",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::BcdCounter,
+            &["CLK", "RST"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_decade(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS93",
+        "4-bit binary counter",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Counter4,
+            &["CLK", "CLR"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_counter4(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS138",
+        "3-to-8 decoder",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Decoder3to8,
+            &["A", "B", "C", "EN"],
+            &["Y0", "Y1", "Y2", "Y3", "Y4", "Y5", "Y6", "Y7"],
+        )],
+        dip16_decoder(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS139",
+        "Dual 2-to-4 decoder",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Decoder4to16,
+            &["A", "B", "EN", "E1"],
+            &["Y0", "Y1", "Y2", "Y3"],
+        )],
+        dip16_decoder(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS151",
+        "8-to-1 multiplexer",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::mux(
+            Func::Mux2,
+            &[
+                "I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "S0", "S1", "S2", "EN",
+            ],
+            &["Y", "Ȳ"],
+            3,
+            true,
+        )],
+        dip16_mux8(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS153",
+        "Dual 4-to-1 multiplexer",
+        Family::TtlSchottky,
+        "U",
+        vec![
+            Unit::mux(
+                Func::Mux2,
+                &["1C0", "1C1", "1C2", "1C3", "1S0", "1S1"],
+                &["1Y"],
+                2,
+                false,
+            ),
+            Unit::mux(
+                Func::Mux2,
+                &["2C0", "2C1", "2C2", "2C3", "2S0", "2S1"],
+                &["2Y"],
+                2,
+                false,
+            ),
+        ],
+        dip16_mux4(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS163",
+        "Synchronous 4-bit binary counter",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Counter4,
+            &["CLK", "CLR", "LD", "A", "B", "C", "D", "ENP", "ENT"],
+            &["Q0", "Q1", "Q2", "Q3", "RCO"],
+        )],
+        dip16_counter4(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS164",
+        "8-bit serial-in parallel-out shift register",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Shift8,
+            &["CLK", "SI", "CLR"],
+            &["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"],
+        )],
+        dip14_shift8(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS174",
+        "Quad D flip-flop",
+        Family::TtlSchottky,
+        "U",
+        vec![
+            Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+            Unit::new(Func::Dff, &["2D", "1CLK"], &["2Q", "2Q̄"]),
+            Unit::new(Func::Dff, &["3D", "3CLK"], &["3Q", "3Q̄"]),
+            Unit::new(Func::Dff, &["4D", "3CLK"], &["4Q", "4Q̄"]),
+        ],
+        dip16_quad_dff(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS192",
+        "Synchronous decade counter, up/down",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Counter4Down,
+            &["CLK", "CLR", "UP", "DOWN"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_counter_updown(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS193",
+        "4-bit binary up/down counter",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Counter4Down,
+            &["CLK", "CLR", "UP", "DOWN"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_counter_updown(),
+        p.clone(),
+    ));
+    out.push(part(
+        "74LS194",
+        "4-bit bidirectional shift register",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Shift8,
+            &["CLK", "SI", "SR", "SL", "S0", "S1"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_shift4(),
+        p.clone(),
+    ));
+
     // 74HC series: CMOS levels on the classic TTL pinouts.
     for (key, title, func, units) in [
         ("74HC00", "Quad 2-input NAND", Func::Nand2, 4),
@@ -911,6 +1267,170 @@ pub fn ttl_shottky() -> Vec<Entry> {
             &Power::cmos(),
         ));
     }
+    for (key, title, dip) in [
+        ("74HC74", "Dual D flip-flop, preset, clear", 0u8),
+        ("74HC76", "Dual JK flip-flop, preset, clear", 1),
+        ("74HC173", "Quad D flip-flop with enable", 2),
+        ("74HC175", "Quad D flip-flop", 2),
+    ] {
+        let units = match (key, dip) {
+            ("74HC74", _) => vec![
+                Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+                Unit::new(Func::Dff, &["2D", "2CLK"], &["2Q", "2Q̄"]),
+            ],
+            ("74HC76", _) => vec![
+                Unit::new(Func::Jk, &["1J", "1K", "1CLK"], &["1Q", "1Q̄"]),
+                Unit::new(Func::Jk, &["2J", "2K", "2CLK"], &["2Q", "2Q̄"]),
+            ],
+            ("74HC173", _) => vec![
+                Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+                Unit::new(Func::Dff, &["2D", "1CLK"], &["2Q", "2Q̄"]),
+                Unit::new(Func::Dff, &["3D", "3CLK"], &["3Q", "3Q̄"]),
+                Unit::new(Func::Dff, &["4D", "3CLK"], &["4Q", "4Q̄"]),
+            ],
+            _ => vec![
+                Unit::new(Func::Dff, &["1D", "1CLK"], &["1Q", "1Q̄"]),
+                Unit::new(Func::Dff, &["2D", "1CLK"], &["2Q", "2Q̄"]),
+                Unit::new(Func::Dff, &["3D", "3CLK"], &["3Q", "3Q̄"]),
+                Unit::new(Func::Dff, &["4D", "3CLK"], &["4Q", "4Q̄"]),
+            ],
+        };
+        let dip_map = match dip {
+            0 => dip16_dual_dff(),
+            1 => dip16_dual_jk(),
+            _ => dip16_quad_dff(),
+        };
+        out.push(part(
+            key,
+            title,
+            Family::TtlSchottky,
+            "U",
+            units,
+            dip_map,
+            Power::cmos(),
+        ));
+        let _ = units;
+    }
+    for (key, title) in [
+        ("74HC138", "3-to-8 decoder"),
+        ("74HC139", "Dual 2-to-4 decoder"),
+    ] {
+        let units = if key == "74HC138" {
+            vec![Unit::new(
+                Func::Decoder3to8,
+                &["A", "B", "C", "EN"],
+                &["Y0", "Y1", "Y2", "Y3", "Y4", "Y5", "Y6", "Y7"],
+            )]
+        } else {
+            vec![Unit::new(
+                Func::Decoder4to16,
+                &["A", "B", "EN", "E1"],
+                &["Y0", "Y1", "Y2", "Y3"],
+            )]
+        };
+        out.push(part(
+            key,
+            title,
+            Family::TtlSchottky,
+            "U",
+            units,
+            dip16_decoder(),
+            Power::cmos(),
+        ));
+    }
+    for (key, title) in [
+        ("74HC151", "8-to-1 multiplexer"),
+        ("74HC153", "Dual 4-to-1 multiplexer"),
+    ] {
+        let units = if key == "74HC151" {
+            vec![Unit::mux(
+                Func::Mux2,
+                &[
+                    "I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "S0", "S1", "S2", "EN",
+                ],
+                &["Y", "Ȳ"],
+                3,
+                true,
+            )]
+        } else {
+            vec![
+                Unit::mux(
+                    Func::Mux2,
+                    &["1C0", "1C1", "1C2", "1C3", "1S0", "1S1"],
+                    &["1Y"],
+                    2,
+                    false,
+                ),
+                Unit::mux(
+                    Func::Mux2,
+                    &["2C0", "2C1", "2C2", "2C3", "2S0", "2S1"],
+                    &["2Y"],
+                    2,
+                    false,
+                ),
+            ]
+        };
+        let dip_map = if key == "74HC151" {
+            dip16_mux8()
+        } else {
+            dip16_mux4()
+        };
+        out.push(part(
+            key,
+            title,
+            Family::TtlSchottky,
+            "U",
+            units,
+            dip_map,
+            Power::cmos(),
+        ));
+    }
+    for (key, title) in [
+        ("74HC163", "Synchronous 4-bit binary counter"),
+        ("74HC192", "Synchronous decade counter, up/down"),
+        ("74HC193", "4-bit binary up/down counter"),
+    ] {
+        let units = if key == "74HC163" {
+            vec![Unit::new(
+                Func::Counter4,
+                &["CLK", "CLR", "LD", "A", "B", "C", "D", "ENP", "ENT"],
+                &["Q0", "Q1", "Q2", "Q3", "RCO"],
+            )]
+        } else {
+            vec![Unit::new(
+                Func::Counter4Down,
+                &["CLK", "CLR", "UP", "DOWN"],
+                &["Q0", "Q1", "Q2", "Q3"],
+            )]
+        };
+        let dip_map = if key == "74HC163" {
+            dip16_counter4()
+        } else {
+            dip16_counter_updown()
+        };
+        out.push(part(
+            key,
+            title,
+            Family::TtlSchottky,
+            "U",
+            units,
+            dip_map,
+            Power::cmos(),
+        ));
+    }
+    out.push(part(
+        "74HC164",
+        "8-bit serial-in parallel-out shift register",
+        Family::TtlSchottky,
+        "U",
+        vec![Unit::new(
+            Func::Shift8,
+            &["CLK", "SI", "CLR"],
+            &["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"],
+        )],
+        dip14_shift8(),
+        Power::cmos(),
+    ));
     out
 }
 
@@ -1008,6 +1528,127 @@ pub fn cmos() -> Vec<Entry> {
         dip16_monostable(),
         p.clone(),
     ));
+    out.push(part(
+        "4003",
+        "Triple JK flip-flop",
+        Family::Cmos,
+        "U",
+        vec![
+            Unit::new(Func::Jk, &["1J", "1K", "1CLK"], &["1Q", "1Q̄"]),
+            Unit::new(Func::Jk, &["2J", "2K", "2CLK"], &["2Q", "2Q̄"]),
+            Unit::new(Func::Jk, &["3J", "3K", "3CLK"], &["3Q", "3Q̄"]),
+        ],
+        dip16_triple_jk3(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4020",
+        "14-bit ripple counter",
+        Family::Cmos,
+        "U",
+        vec![Unit::new(
+            Func::Counter4,
+            &["CLK", "RST"],
+            &["Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11"],
+        )],
+        dip16_osc14(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4042",
+        "Quad D latch",
+        Family::Cmos,
+        "U",
+        vec![
+            Unit::new(Func::Dff, &["1D", "1EN"], &["1Q"]),
+            Unit::new(Func::Dff, &["2D", "2EN"], &["2Q"]),
+            Unit::new(Func::Dff, &["3D", "3EN"], &["3Q"]),
+            Unit::new(Func::Dff, &["4D", "4EN"], &["4Q"]),
+        ],
+        dip16_quad_latch(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4051",
+        "8-to-1 analogue multiplexer",
+        Family::Cmos,
+        "U",
+        vec![Unit::mux(
+            Func::Mux2,
+            &[
+                "I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "S0", "S1", "S2", "EN",
+            ],
+            &["Y"],
+            3,
+            true,
+        )],
+        dip16_mux8(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4053",
+        "Triple 2-to-1 multiplexer",
+        Family::Cmos,
+        "U",
+        vec![
+            Unit::mux(Func::Mux2, &["1A", "1B", "1S"], &["1Y"], 1, false),
+            Unit::mux(Func::Mux2, &["2A", "2B", "2S"], &["2Y"], 1, false),
+            Unit::mux(Func::Mux2, &["3A", "3B", "3S"], &["3Y"], 1, false),
+        ],
+        dip16_mux2(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4511",
+        "BCD-to-7-segment decoder and driver",
+        Family::Cmos,
+        "U",
+        vec![Unit::new(
+            Func::Decoder4to16,
+            &["A", "B", "C", "D", "LT", "BI", "EI"],
+            &["a", "b", "c", "d", "e", "f", "g"],
+        )],
+        dip16_decoder7(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4518",
+        "Dual precision monostable multivibrator",
+        Family::Cmos,
+        "U",
+        vec![
+            Unit::new(Func::DffNeg, &["1A", "1B"], &["1Q", "1Q̄"]),
+            Unit::new(Func::DffNeg, &["2A", "2B"], &["2Q", "2Q̄"]),
+        ],
+        dip16_monostable(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4520",
+        "4-bit synchronous binary counter",
+        Family::Cmos,
+        "U",
+        vec![Unit::new(
+            Func::Counter4,
+            &["CLK", "CLR"],
+            &["Q0", "Q1", "Q2", "Q3"],
+        )],
+        dip16_counter4(),
+        p.clone(),
+    ));
+    out.push(part(
+        "4530",
+        "Dual 5-bit comparator",
+        Family::Cmos,
+        "U",
+        vec![Unit::new(
+            Func::Mux2,
+            &["A0", "A1", "A2", "A3", "A4", "B0", "B1", "B2", "B3", "B4"],
+            &["EQ", "GT", "LT"],
+        )],
+        dip16_comparator(),
+        p.clone(),
+    ));
     out
 }
 
@@ -1063,7 +1704,242 @@ pub fn ecl() -> Vec<Entry> {
         dip14_dual4(),
         p.clone(),
     ));
+    out.push(part(
+        "10115",
+        "Triple 3-input NOR",
+        Family::Ecl,
+        "U",
+        repeated(3, Func::Nor3, 3),
+        dip14_triple3(),
+        p.clone(),
+    ));
+    for (key, title, func, units) in [
+        ("10119", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10123", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10129", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10216", "Quad 2-input OR", Func::Or2, 4),
+        ("10222", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10224", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10225", "Quad 2-input NOR", Func::Nor2, 4),
+        ("10226", "Quad 2-input NOR", Func::Nor2, 4),
+    ] {
+        out.push(gate_part(key, title, Family::Ecl, func, units, &p));
+    }
+    for (key, title) in [
+        ("10217", "Hex driver"),
+        ("10230", "Hex non-inverting driver"),
+        ("10231", "50-ohm driver"),
+        ("10232", "Dual OR and AND driver"),
+    ] {
+        out.push(gate_part(key, title, Family::Ecl, Func::Buf1, 6, &p));
+    }
+    out.push(part(
+        "10221",
+        "Dual 4-input NOR",
+        Family::Ecl,
+        "U",
+        repeated(2, Func::Nor4, 4),
+        dip14_dual4(),
+        p.clone(),
+    ));
     out
+}
+
+/// 16-pin DIP with an 8-to-3 priority encoder.
+fn dip16_encoder8() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1"),
+        (2, "2"),
+        (3, "3"),
+        (4, "4"),
+        (5, "5"),
+        (6, "6"),
+        (7, "7"),
+        (8, "8"),
+        (9, "EI"),
+        (10, "GS"),
+        (11, "A0"),
+        (12, "A1"),
+        (13, "A2"),
+        (14, "VCC"),
+        (15, "GND"),
+    ]
+}
+
+/// 16-pin DIP with two 4-to-1 multiplexers.
+fn dip16_mux4() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1C0"),
+        (2, "1C1"),
+        (3, "1C2"),
+        (4, "1C3"),
+        (5, "1Y"),
+        (6, "1S0"),
+        (7, "1S1"),
+        (8, "2Y"),
+        (9, "GND"),
+        (10, "2C0"),
+        (11, "2C1"),
+        (12, "2C2"),
+        (13, "2C3"),
+        (14, "2S0"),
+        (15, "2S1"),
+        (16, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with four 2-to-1 multiplexers.
+fn dip16_mux2() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1A"),
+        (2, "1B"),
+        (3, "1Y"),
+        (4, "1S"),
+        (5, "2A"),
+        (6, "2B"),
+        (7, "2Y"),
+        (8, "2S"),
+        (9, "3A"),
+        (10, "3B"),
+        (11, "3Y"),
+        (12, "3S"),
+        (13, "4A"),
+        (14, "4B"),
+        (15, "4Y"),
+        (16, "4S"),
+    ]
+}
+
+/// 16-pin DIP with a 3-to-8 decoder.
+fn dip16_decoder() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "A"),
+        (2, "B"),
+        (3, "C"),
+        (4, "E1"),
+        (5, "E2"),
+        (6, "Y0"),
+        (7, "Y1"),
+        (8, "GND"),
+        (9, "Y2"),
+        (10, "Y3"),
+        (11, "Y4"),
+        (12, "Y5"),
+        (13, "Y6"),
+        (14, "Y7"),
+        (15, "EN"),
+        (16, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with four D flip-flops.
+///
+/// The first pair shares one clock and so does the second pair, the way
+/// the 74174 is wired.
+fn dip16_quad_dff() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1D"),
+        (2, "1Q"),
+        (3, "1Q̄"),
+        (4, "2D"),
+        (5, "2Q"),
+        (6, "2Q̄"),
+        (7, "3D"),
+        (8, "3Q"),
+        (9, "3Q̄"),
+        (10, "4D"),
+        (11, "4Q"),
+        (12, "4Q̄"),
+        (13, "1CLK"),
+        (14, "3CLK"),
+        (15, "GND"),
+        (16, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with an up/down counter: the 74193 family.
+fn dip16_counter_updown() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "CLK"),
+        (2, "CLR"),
+        (3, "UP"),
+        (4, "DOWN"),
+        (5, "LD"),
+        (6, "A"),
+        (7, "B"),
+        (8, "C"),
+        (9, "D"),
+        (10, "GND"),
+        (11, "Q0"),
+        (12, "Q1"),
+        (13, "Q2"),
+        (14, "Q3"),
+        (15, "TC"),
+        (16, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with a 4-bit bidirectional shift register.
+fn dip16_shift4() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "CLR"),
+        (2, "SL"),
+        (3, "SR"),
+        (4, "S0"),
+        (5, "S1"),
+        (6, "Q0"),
+        (7, "Q1"),
+        (8, "GND"),
+        (9, "Q2"),
+        (10, "Q3"),
+        (11, "CLK"),
+        (12, "SI"),
+        (13, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with four D latches.
+fn dip16_quad_latch() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "1D"),
+        (2, "1EN"),
+        (3, "1Q"),
+        (4, "2D"),
+        (5, "2EN"),
+        (6, "2Q"),
+        (7, "3D"),
+        (8, "3EN"),
+        (9, "3Q"),
+        (10, "4D"),
+        (11, "4EN"),
+        (12, "4Q"),
+        (13, "GND"),
+        (14, "LT"),
+        (15, "BI"),
+        (16, "VCC"),
+    ]
+}
+
+/// 16-pin DIP with a BCD-to-seven-segment decoder.
+fn dip16_decoder7() -> Vec<(u8, &'static str)> {
+    vec![
+        (1, "LT"),
+        (2, "BI"),
+        (3, "EI"),
+        (4, "f"),
+        (5, "g"),
+        (6, "a"),
+        (7, "b"),
+        (8, "c"),
+        (9, "d"),
+        (10, "e"),
+        (11, "GND"),
+        (12, "D"),
+        (13, "C"),
+        (14, "B"),
+        (15, "A"),
+        (16, "VCC"),
+    ]
 }
 
 /// The virtual instruments, the way Multisim puts them on the toolbar.

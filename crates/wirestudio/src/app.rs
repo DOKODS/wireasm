@@ -346,6 +346,7 @@ impl WireStudio {
             last_canvas: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             window_title: String::new(),
         };
+        crate::editor::set_code_font_size(app.code_font_size() as f32);
         app.status = app.tr("status.ready").to_string();
         if let Some(path) = initial {
             app.open_path(&path);
@@ -360,6 +361,150 @@ impl WireStudio {
 
     pub fn tr(&self, key: &str) -> &'static str {
         t(self.lang, key)
+    }
+
+    /// Push the theme and the zoom of the interface into the context.
+    fn apply_appearance(&mut self, ctx: &egui::Context) {
+        let scale = self.ui_scale() as f32;
+        if (ctx.zoom_factor() - scale).abs() > 0.001 {
+            ctx.set_zoom_factor(scale);
+        }
+        let theme = self.theme();
+        let wanted = match theme {
+            crate::settings::Theme::Dark => egui::Theme::Dark,
+            crate::settings::Theme::Light => egui::Theme::Light,
+        };
+        if ctx.theme() != wanted {
+            ctx.set_theme(wanted);
+            // The visuals go with the theme, so that the panels and the
+            // background follow it too.
+            ctx.set_visuals(match wanted {
+                egui::Theme::Dark => egui::Visuals::dark(),
+                egui::Theme::Light => egui::Visuals::light(),
+            });
+        }
+    }
+
+    // ------------------------------------------------------ parameters
+
+    /// The theme of the interface.
+    pub fn theme(&self) -> crate::settings::Theme {
+        self.settings
+            .theme
+            .as_deref()
+            .and_then(crate::settings::Theme::from_key)
+            .unwrap_or(crate::settings::Theme::Dark)
+    }
+
+    pub fn set_theme(&mut self, theme: crate::settings::Theme) {
+        self.settings.theme = Some(theme.key().to_string());
+        self.settings.save();
+    }
+
+    /// The look of the schematic sheet.
+    pub fn sheet_style(&self) -> crate::settings::SheetStyle {
+        self.settings
+            .sheet_style
+            .as_deref()
+            .and_then(crate::settings::SheetStyle::from_key)
+            .unwrap_or(crate::settings::SheetStyle::Multisim)
+    }
+
+    pub fn set_sheet_style(&mut self, style: crate::settings::SheetStyle) {
+        self.settings.sheet_style = Some(style.key().to_string());
+        self.settings.save();
+    }
+
+    /// The zoom of the whole interface.
+    pub fn ui_scale(&self) -> f64 {
+        self.settings.ui_scale.unwrap_or(1.0).clamp(0.75, 1.75)
+    }
+
+    pub fn set_ui_scale(&mut self, scale: f64) {
+        self.settings.ui_scale = Some(scale.clamp(0.75, 1.75));
+        self.settings.save();
+    }
+
+    /// The size of the code font, in points.
+    pub fn code_font_size(&self) -> f64 {
+        self.settings.code_font_size.unwrap_or(14.0).clamp(10.0, 22.0)
+    }
+
+    pub fn set_code_font_size(&mut self, size: f64) {
+        self.settings.code_font_size = Some(size.clamp(10.0, 22.0));
+        crate::editor::set_code_font_size(size.clamp(10.0, 22.0) as f32);
+        self.settings.save();
+    }
+
+    /// Whether the sheet shows the grid.
+    pub fn show_grid(&self) -> bool {
+        self.settings.show_grid.unwrap_or(true)
+    }
+
+    pub fn set_show_grid(&mut self, show: bool) {
+        self.settings.show_grid = Some(show);
+        self.settings.save();
+    }
+
+    /// Whether the sheet shows the node numbers.
+    pub fn show_node_numbers(&self) -> bool {
+        self.settings.show_node_numbers.unwrap_or(true)
+    }
+
+    pub fn set_show_node_numbers(&mut self, show: bool) {
+        self.settings.show_node_numbers = Some(show);
+        self.settings.save();
+    }
+
+    /// Whether the instrument panels open after a run.
+    pub fn auto_open_panels(&self) -> bool {
+        self.settings.auto_open_panels.unwrap_or(true)
+    }
+
+    pub fn set_auto_open_panels(&mut self, open: bool) {
+        self.settings.auto_open_panels = Some(open);
+        self.settings.save();
+    }
+
+    /// The step of the transient analysis, in seconds.
+    pub fn sim_dt(&self) -> f64 {
+        self.settings.sim_dt.unwrap_or(1e-4).clamp(1e-6, 1e-2)
+    }
+
+    pub fn set_sim_dt(&mut self, dt: f64) {
+        self.settings.sim_dt = Some(dt.clamp(1e-6, 1e-2));
+        self.circuit.model.opts.dt = self.sim_dt();
+        self.settings.save();
+    }
+
+    /// The length of the transient analysis, in seconds.
+    pub fn sim_stop(&self) -> f64 {
+        self.settings.sim_stop.unwrap_or(2e-3).clamp(1e-4, 1.0)
+    }
+
+    pub fn set_sim_stop(&mut self, stop: f64) {
+        self.settings.sim_stop = Some(stop.clamp(1e-4, 1.0));
+        self.circuit.model.opts.t_stop = self.sim_stop();
+        self.settings.save();
+    }
+
+    /// Put every parameter back to its default.
+    pub fn reset_settings(&mut self) {
+        self.settings.theme = None;
+        self.settings.sheet_style = None;
+        self.settings.ui_scale = None;
+        self.settings.code_font_size = None;
+        self.settings.line_numbers = None;
+        self.settings.show_grid = None;
+        self.settings.show_node_numbers = None;
+        self.settings.auto_open_panels = None;
+        self.settings.sim_dt = None;
+        self.settings.sim_stop = None;
+        self.settings.save();
+        self.editor.line_numbers = true;
+        self.circuit.model.opts.dt = 1e-4;
+        self.circuit.model.opts.t_stop = 2e-3;
+        self.status = self.tr("settings.reset_done").to_string();
     }
 
     pub fn node_title(&self, kind: &str) -> String {
@@ -1052,6 +1197,7 @@ impl WireStudio {
                 Workspace::Graph => {
                     self.save(false);
                 }
+                Workspace::Settings => {}
             },
             Action::SaveAs => match self.workspace {
                 Workspace::Code => {
@@ -1063,6 +1209,7 @@ impl WireStudio {
                 Workspace::Graph => {
                     self.save(true);
                 }
+                Workspace::Settings => {}
             },
             Action::CodeOpen => {
                 self.workspace = Workspace::Code;
@@ -1561,6 +1708,7 @@ impl WireStudio {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.apply_appearance(&ctx);
         self.poll_job(&ctx);
         self.handle_close(&ctx);
         if self.needs_compile {
@@ -1584,6 +1732,9 @@ impl WireStudio {
             }
             Workspace::Circuit => {
                 self.circuit_ui(ui);
+            }
+            Workspace::Settings => {
+                self.settings_ui(ui);
             }
         }
 
@@ -1796,6 +1947,10 @@ impl WireStudio {
                         self.workspace = Workspace::Circuit;
                         ui.close();
                     }
+                    if ui.button(s("workspace.settings")).clicked() {
+                        self.workspace = Workspace::Settings;
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(s("edit.fit")).clicked() {
                         action = Some(Action::Fit);
@@ -1871,6 +2026,12 @@ impl WireStudio {
                 {
                     self.workspace = Workspace::Circuit;
                 }
+                if ui
+                    .selectable_label(self.workspace == Workspace::Settings, s("workspace.settings"))
+                    .clicked()
+                {
+                    self.workspace = Workspace::Settings;
+                }
                 if self.workspace == Workspace::Circuit {
                     if ui.button(s("circuit.run")).clicked() {
                         action = Some(Action::CircuitRun);
@@ -1912,10 +2073,6 @@ impl WireStudio {
                         }
                     });
                 ui.separator();
-                if ui.button(s("toolbar.fit")).clicked() {
-                    action = Some(Action::Fit);
-                }
-                ui.label(format!("{:.0}%", self.view.zoom * 100.0));
                 if let Some(job) = &self.job {
                     ui.spinner();
                     ui.label(
@@ -1924,6 +2081,8 @@ impl WireStudio {
                             .weak(),
                     );
                 }
+                // The file name and the zoom sit at the right edge. They go
+                // into one group, otherwise they overlap each other.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (path, dirty) = match self.workspace {
                         Workspace::Circuit => (self.circuit.path.clone(), self.circuit.dirty),
@@ -1938,6 +2097,21 @@ impl WireStudio {
                         name.push_str(" *");
                     }
                     ui.label(RichText::new(name).monospace());
+                    ui.separator();
+                    let in_circuit = self.workspace == Workspace::Circuit;
+                    let zoom = if in_circuit {
+                        self.circuit.view.zoom
+                    } else {
+                        self.view.zoom
+                    };
+                    ui.label(format!("{:.0}%", zoom * 100.0));
+                    if ui.button(s("toolbar.fit")).clicked() {
+                        action = Some(if in_circuit {
+                            Action::CircuitFit
+                        } else {
+                            Action::Fit
+                        });
+                    }
                 });
             });
         });

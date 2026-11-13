@@ -19,16 +19,16 @@ jobs:
         include:
           - os: ubuntu-latest
             name: x86_64-linux
-            archive: wirestudio-0.4.2-x86_64-linux.tar.gz
+            archive: wirestudio-0.4.3-x86_64-linux.tar.gz
           - os: windows-latest
             name: x86_64-windows
-            archive: wirestudio-0.4.2-x86_64-windows.zip
+            archive: wirestudio-0.4.3-x86_64-windows.zip
           - os: macos-15-intel
             name: x86_64-macos
-            archive: wirestudio-0.4.2-x86_64-macos.tar.gz
+            archive: wirestudio-0.4.3-x86_64-macos.tar.gz
           - os: macos-15
             name: aarch64-macos
-            archive: wirestudio-0.4.2-aarch64-macos.tar.gz
+            archive: wirestudio-0.4.3-aarch64-macos.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

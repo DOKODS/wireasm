@@ -23,7 +23,7 @@ impl State {
 
 /// Evaluate a combinational unit. The inputs are the logic levels of its
 /// input pins; the result are the levels of its output pins.
-pub fn combinational(func: Func, ins: &[bool], sel_bits: usize) -> Vec<bool> {
+pub fn combinational(func: Func, ins: &[bool], sel_bits: usize, has_enable: bool) -> Vec<bool> {
     let bit = |i: usize| ins.get(i).copied().unwrap_or(false);
     match func {
         Func::And2 | Func::And3 | Func::And4 => {
@@ -53,11 +53,21 @@ pub fn combinational(func: Func, ins: &[bool], sel_bits: usize) -> Vec<bool> {
             vec![bit(ins.len().saturating_sub(1)) && n % 2 == 1]
         }
         Func::Mux2 => {
-            // The last pin enables, the pins before it select, the rest are
-            // the data inputs.
+            // The enable comes last, the lines before it carry the address,
+            // the rest are the data inputs.
             let en_index = ins.len().saturating_sub(1);
-            let enabled = ins.get(en_index).copied().unwrap_or(true);
-            let sel_start = en_index.saturating_sub(sel_bits);
+            let enabled = if has_enable {
+                ins.get(en_index).copied().unwrap_or(true)
+            } else {
+                true
+            };
+            // The address lines sit just before the enable, or at the end
+            // when the unit has no enable.
+            let sel_start = if has_enable {
+                en_index.saturating_sub(sel_bits)
+            } else {
+                ins.len().saturating_sub(sel_bits)
+            };
             let mut index = 0usize;
             for bit_index in 0..sel_bits {
                 if ins.get(sel_start + bit_index).copied().unwrap_or(false) {
@@ -66,6 +76,33 @@ pub fn combinational(func: Func, ins: &[bool], sel_bits: usize) -> Vec<bool> {
             }
             let value = ins.get(index).copied().unwrap_or(false);
             vec![enabled && value, enabled && !value]
+        }
+        Func::Decoder3to8 => {
+            // Three address inputs, eight decoded outputs.
+            let address = (0..3)
+                .map(|i| if bit(i) { 1usize } else { 0 })
+                .fold(0usize, |acc, v| (acc << 1) | v);
+            let enabled = bit(3);
+            (0..8)
+                .map(|i| enabled && i == address)
+                .collect()
+        }
+        Func::Encoder8to3 => {
+            // The highest input that is high wins.
+            let mut address = 0usize;
+            let mut found = false;
+            for i in (0..8).rev() {
+                if bit(i) {
+                    address = i;
+                    found = true;
+                    break;
+                }
+            }
+            vec![
+                found && (address & 1) != 0,
+                found && (address & 2) != 0,
+                found && (address & 4) != 0,
+            ]
         }
         Func::Decoder4to16 => {
             // Four address inputs, four decoded outputs.
@@ -200,7 +237,7 @@ mod tests {
     fn nand_truth_table() {
         for a in [false, true] {
             for b in [false, true] {
-                let out = combinational(Func::Nand2, &[a, b], 0);
+                let out = combinational(Func::Nand2, &[a, b], 0, false);
                 assert_eq!(out[0], !(a && b), "a={a} b={b}");
             }
         }
@@ -208,9 +245,9 @@ mod tests {
 
     #[test]
     fn xor_counts_ones() {
-        assert!(!combinational(Func::Xor2, &[false, false], 0)[0]);
-        assert!(combinational(Func::Xor2, &[true, false], 0)[0]);
-        assert!(!combinational(Func::Xor2, &[true, true], 0)[0]);
+        assert!(!combinational(Func::Xor2, &[false, false], 0, false)[0]);
+        assert!(combinational(Func::Xor2, &[true, false], 0, false)[0]);
+        assert!(!combinational(Func::Xor2, &[true, true], 0, false)[0]);
     }
 
     #[test]

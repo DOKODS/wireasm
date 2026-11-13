@@ -19,6 +19,7 @@ pub enum Workspace {
     Graph,
     Code,
     Circuit,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,8 +219,18 @@ impl CodeEditor {
 
 // ---------------------------------------------------------------- highlighting
 
-/// The size of the code font, in points.
-const CODE_FONT_SIZE: f32 = 14.0;
+/// The size of the code font, in points. It follows the settings.
+static CODE_FONT_SIZE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(14);
+
+/// The current code font size.
+pub fn code_font_size() -> f32 {
+    CODE_FONT_SIZE.load(std::sync::atomic::Ordering::Relaxed) as f32
+}
+
+/// Set the code font size.
+pub fn set_code_font_size(size: f32) {
+    CODE_FONT_SIZE.store(size.round() as u32, std::sync::atomic::Ordering::Relaxed);
+}
 
 const DEFAULT: Color32 = Color32::from_rgb(212, 212, 212);
 const COMMENT: Color32 = Color32::from_rgb(106, 153, 85);
@@ -344,7 +355,7 @@ pub fn highlight(
     wrap_width: f32,
     syntax: Syntax,
 ) -> std::sync::Arc<egui::Galley> {
-    let font = FontId::monospace(CODE_FONT_SIZE);
+    let font = FontId::monospace(code_font_size());
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let src = text.as_str();
@@ -555,79 +566,95 @@ struct Tok<'a> {
 
 /// A tiny lexer that keeps every byte of the input, so highlighting never
 /// changes the text.
+///
+/// The source is walked by characters, not by bytes: a comment in Russian or
+/// any other non-ASCII text would otherwise cut a code point in half.
 fn tokens(src: &str) -> Vec<Tok<'_>> {
-    let bytes = src.as_bytes();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let start = i;
-        let c = bytes[i] as char;
+    let mut chars = src.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
         if c.is_whitespace() {
-            while i < bytes.len() && (bytes[i] as char).is_whitespace() {
-                i += 1;
+            let mut end = start + c.len_utf8();
+            while let Some((i, n)) = chars.peek().copied() {
+                if !n.is_whitespace() {
+                    break;
+                }
+                end = i + n.len_utf8();
+                chars.next();
             }
             out.push(Tok {
-                text: &src[start..i],
+                text: &src[start..end],
                 kind: TokKind::Space,
             });
         } else if c == '"' || c == '\'' {
-            let quote = bytes[i];
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' {
-                    i += 2;
+            let quote = c;
+            let mut end = start + c.len_utf8();
+            while let Some((i, n)) = chars.next() {
+                end = i + n.len_utf8();
+                if n == '\\' {
+                    // The escaped character is part of the string.
+                    if let Some((j, m)) = chars.next() {
+                        end = j + m.len_utf8();
+                    }
                     continue;
                 }
-                if bytes[i] == quote {
-                    i += 1;
+                if n == quote {
                     break;
                 }
-                i += 1;
             }
             out.push(Tok {
-                text: &src[start..i.min(src.len())],
+                text: &src[start..end],
                 kind: TokKind::String,
             });
         } else if c.is_ascii_digit()
             || (c == '0'
-                && i + 1 < bytes.len()
-                && matches!(bytes[i + 1], b'x' | b'X' | b'b' | b'B'))
+                && matches!(
+                    chars.peek().map(|(_, n)| *n),
+                    Some('x') | Some('X') | Some('b') | Some('B')
+                ))
         {
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric()
-                    || bytes[i] == b'_'
-                    || bytes[i] == b'.'
-                    || ((bytes[i] == b'+' || bytes[i] == b'-')
+            let mut end = start + c.len_utf8();
+            let mut prev = c;
+            while let Some((i, n)) = chars.peek().copied() {
+                let keep = n.is_ascii_alphanumeric()
+                    || n == '_'
+                    || n == '.'
+                    || ((n == '+' || n == '-')
                         && i > start
-                        && matches!(bytes[i - 1], b'e' | b'E' | b'p' | b'P')))
-            {
-                i += 1;
+                        && matches!(prev, 'e' | 'E' | 'p' | 'P'));
+                if !keep {
+                    break;
+                }
+                end = i + n.len_utf8();
+                prev = n;
+                chars.next();
             }
             out.push(Tok {
-                text: &src[start..i],
+                text: &src[start..end],
                 kind: TokKind::Number,
             });
         } else if c.is_ascii_alphabetic() || c == '_' || c == '.' || c == '%' {
-            while i < bytes.len()
-                && ((bytes[i] as char).is_ascii_alphanumeric()
-                    || bytes[i] == b'_'
-                    || bytes[i] == b'.'
-                    || bytes[i] == b'%')
-            {
-                i += 1;
+            let mut end = start + c.len_utf8();
+            while let Some((i, n)) = chars.peek().copied() {
+                if !(n.is_ascii_alphanumeric() || n == '_' || n == '.' || n == '%') {
+                    break;
+                }
+                end = i + n.len_utf8();
+                chars.next();
             }
             // A trailing ':' makes an asm label part of the token.
-            if i < bytes.len() && bytes[i] == b':' {
-                i += 1;
+            if let Some((i, ':')) = chars.peek().copied() {
+                end = i + 1;
+                chars.next();
             }
             out.push(Tok {
-                text: &src[start..i],
+                text: &src[start..end],
                 kind: TokKind::Ident,
             });
         } else {
-            i += 1;
+            let end = start + c.len_utf8();
             out.push(Tok {
-                text: &src[start..i],
+                text: &src[start..end],
                 kind: TokKind::Punct,
             });
         }
@@ -927,7 +954,7 @@ impl WireStudio {
 
         // The editor fills the window. A fixed width left a gap on a wide
         // screen and pushed the text out of view on Windows.
-        let font = egui::FontId::monospace(CODE_FONT_SIZE);
+        let font = egui::FontId::monospace(code_font_size());
         let (row_height, char_width) =
             ui.fonts_mut(|f| (f.row_height(&font), f.glyph_width(&font, '0')));
         let digits = lines.to_string().len() as f32;
@@ -980,5 +1007,44 @@ impl WireStudio {
                 tab.dirty = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lexer must not cut a code point in half. A comment in Russian
+    /// used to panic the editor.
+    #[test]
+    fn lexer_keeps_non_ascii_text_whole() {
+        let src = "; Шаблон ассемблера\nmov x0, #42\n// комментарий\n";
+        let toks = tokens(src);
+        let joined: String = toks.iter().map(|t| t.text).collect();
+        assert_eq!(joined, src, "the lexer changed the text");
+        assert!(joined.contains('Ш'));
+    }
+
+    #[test]
+    fn lexer_splits_english_code() {
+        let src = "mov x0, #42\nbl printf\n";
+        let toks = tokens(src);
+        let joined: String = toks.iter().map(|t| t.text).collect();
+        assert_eq!(joined, src);
+        let words: Vec<&str> = toks
+            .iter()
+            .filter(|t| t.kind == TokKind::Ident)
+            .map(|t| t.text)
+            .collect();
+        assert!(words.contains(&"mov"));
+        assert!(words.contains(&"bl"));
+    }
+
+    #[test]
+    fn lexer_handles_unterminated_strings() {
+        let src = "char *s = \"незакрытая\n";
+        let toks = tokens(src);
+        let joined: String = toks.iter().map(|t| t.text).collect();
+        assert_eq!(joined, src);
     }
 }

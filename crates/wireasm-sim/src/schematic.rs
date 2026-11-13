@@ -155,6 +155,9 @@ pub struct Part {
     pub catalog_units: Vec<crate::library::Unit>,
     /// Supply of a catalogue part.
     pub catalog_power: Option<crate::library::Power>,
+    /// The device a catalogue part is, when it is not a package of logic
+    /// units: a diode, a transistor, an amplifier.
+    pub catalog_device: Option<crate::library::Device>,
     /// The instrument this part is, when it is one.
     pub instrument: Option<crate::netlist::InstrumentKind>,
 }
@@ -178,6 +181,7 @@ impl Part {
             catalog: None,
             catalog_units: Vec::new(),
             catalog_power: None,
+            catalog_device: None,
             instrument: None,
         };
         match kind {
@@ -209,6 +213,9 @@ impl Part {
             return (0..kind.channel_count())
                 .map(|i| crate::library_data::channel_label(kind, i))
                 .collect();
+        }
+        if let Some(device) = self.catalog_device {
+            return device.pin_names();
         }
         if !self.catalog_units.is_empty() {
             let mut out: Vec<String> = Vec::new();
@@ -254,7 +261,7 @@ impl Part {
 
     /// Whether the part comes from the component library.
     pub fn is_catalog(&self) -> bool {
-        !self.catalog_units.is_empty() || self.instrument.is_some()
+        !self.catalog_units.is_empty() || self.catalog_device.is_some() || self.instrument.is_some()
     }
 
     /// The catalogue entry the part was placed from.
@@ -363,6 +370,32 @@ impl PinAddr {
 pub struct Wire {
     pub a: PinAddr,
     pub b: PinAddr,
+    /// Colour of the wire, as RGB. The default is the colour of the sheet.
+    pub color: Option<[u8; 3]>,
+    /// The points the wire bends at. Empty means a straight L-shaped route,
+    /// the way Multisim draws a wire that was not reshaped by hand.
+    pub points: Vec<WirePoint>,
+    /// Name shown on the wire.
+    pub name: String,
+}
+
+/// A point of a wire that the user can drag.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WirePoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Wire {
+    pub fn new(a: PinAddr, b: PinAddr) -> Wire {
+        Wire {
+            a,
+            b,
+            color: None,
+            points: Vec::new(),
+            name: String::new(),
+        }
+    }
 }
 
 /// A measurement point on a pin.
@@ -583,7 +616,7 @@ impl Schematic {
         {
             return;
         }
-        self.wires.push(Wire { a, b });
+        self.wires.push(Wire::new(a, b));
     }
 
     pub fn probe(&mut self, part: usize, pin: &str, name: &str) {
@@ -637,6 +670,9 @@ impl Schematic {
         if p.instrument.is_some() {
             return self.instrument_pin_offset(p, pin);
         }
+        if let Some(device) = p.catalog_device {
+            return device_pin_offset(device, pin);
+        }
         if p.is_catalog() {
             return self.catalog_pin_offset(p, pin);
         }
@@ -658,7 +694,7 @@ impl Schematic {
         }
     }
 
-    /// The place of one terminal of an instrument: they sit on the left edge
+/// The place of one terminal of an instrument: they sit on the left edge
     /// of the box, the way the instrument symbols of Multisim do.
     fn instrument_pin_offset(&self, part: &Part, pin: &str) -> (f32, f32) {
         let kind = match part.instrument {
@@ -887,6 +923,65 @@ impl Schematic {
                 });
                 continue;
             }
+            // A device part is one component: a diode, a transistor, an
+            // amplifier.
+            if let Some(device) = part.catalog_device {
+                let mut pins: Vec<String> = Vec::new();
+                for pin in part.pins() {
+                    let node = nets
+                        .get(&(idx, pin.clone()))
+                        .cloned()
+                        .ok_or_else(|| format!("{} pin {pin} is not wired", part.id))?;
+                    pins.push(node);
+                }
+                let kind = match device {
+                    crate::library::Device::Diode => ComponentKind::Diode(DiodeModel::default()),
+                    crate::library::Device::Led => ComponentKind::Led(LedModel::default()),
+                    crate::library::Device::Zener => ComponentKind::Diode(DiodeModel {
+                        is: 1e-12,
+                        n: 1.0,
+                        rs: 0.1,
+                    }),
+                    crate::library::Device::Bjt { npn } => ComponentKind::Bjt(crate::netlist::Bjt {
+                        npn,
+                        beta: 100.0,
+                        is: 1e-14,
+                        vbe: 0.7,
+                    }),
+                    crate::library::Device::Mosfet { nch } => {
+                        ComponentKind::Mosfet(crate::netlist::Mosfet {
+                            nch,
+                            vto: 2.0,
+                            kn: 1e-3,
+                        })
+                    }
+                    crate::library::Device::OpAmp => ComponentKind::OpAmp(crate::netlist::OpAmp {
+                        gain: 1e5,
+                        vdd: 15.0,
+                        vss: -15.0,
+                        rout: 100.0,
+                    }),
+                    crate::library::Device::Comparator => {
+                        ComponentKind::Comparator(crate::netlist::Comparator {
+                            vth: 0.0,
+                            vdd: 5.0,
+                            rout: 100.0,
+                        })
+                    }
+                    crate::library::Device::Timer555 => {
+                        ComponentKind::Timer555(crate::netlist::Timer555 {
+                            vcc: 5.0,
+                            rout: 100.0,
+                        })
+                    }
+                };
+                circuit.add(Component {
+                    id: part.id.clone(),
+                    kind,
+                    pins,
+                });
+                continue;
+            }
             // A catalogue part is a package of units: every unit becomes its
             // own component in the netlist.
             if part.is_catalog() {
@@ -932,7 +1027,8 @@ impl Schematic {
                             vth: power.vth,
                             r: 50.0,
                             n_in,
-                            sel_bits: unit.ins.len().saturating_sub(1),
+                            sel_bits: unit.sel_bits.unwrap_or(0) as usize,
+                            has_enable: unit.has_enable,
                         })
                     };
                     circuit.add(Component { id, kind, pins });
@@ -1100,6 +1196,9 @@ impl Schematic {
                     if let Some(kind) = p.instrument {
                         m.insert("instrument".into(), Json::Str(kind.key().into()));
                     }
+                    if let Some(device) = p.catalog_device {
+                        m.insert("device".into(), Json::Str(device.key().into()));
+                    }
                     let units = p
                         .catalog_units
                         .iter()
@@ -1139,6 +1238,28 @@ impl Schematic {
                 let mut m = BTreeMap::new();
                 m.insert("a".into(), pin_json(&w.a));
                 m.insert("b".into(), pin_json(&w.b));
+                if let Some(color) = w.color {
+                    m.insert(
+                        "color".into(),
+                        Json::Arr(color.iter().map(|c| Json::Num(*c as f64)).collect()),
+                    );
+                }
+                if !w.points.is_empty() {
+                    let points = w
+                        .points
+                        .iter()
+                        .map(|p| {
+                            let mut pm = BTreeMap::new();
+                            pm.insert("x".into(), Json::Num(p.x as f64));
+                            pm.insert("y".into(), Json::Num(p.y as f64));
+                            Json::Obj(pm)
+                        })
+                        .collect();
+                    m.insert("points".into(), Json::Arr(points));
+                }
+                if !w.name.is_empty() {
+                    m.insert("name".into(), Json::Str(w.name.clone()));
+                }
                 Json::Obj(m)
             })
             .collect();
@@ -1228,6 +1349,13 @@ impl Schematic {
                     {
                         p.instrument = Some(kind);
                     }
+                    if let Some(device) = item
+                        .get("device")
+                        .and_then(|x| x.as_str())
+                        .and_then(crate::library::Device::from_key)
+                    {
+                        p.catalog_device = Some(device);
+                    }
                     if let Some(Json::Arr(units)) = item.get("units") {
                         for u in units {
                             let func = u
@@ -1251,8 +1379,13 @@ impl Schematic {
                                     }
                                 }
                             }
-                            p.catalog_units
-                                .push(crate::library::Unit { func, ins, outs });
+                            p.catalog_units.push(crate::library::Unit {
+                                func,
+                                ins,
+                                outs,
+                                sel_bits: u.get("selBits").and_then(|x| x.as_u64()).map(|v| v as u8),
+                                has_enable: u.get("enable").and_then(|x| x.as_bool()).unwrap_or(false),
+                            });
                         }
                     }
                     if let Some(pw) = item.get("power") {
@@ -1288,16 +1421,39 @@ impl Schematic {
                 ) else {
                     continue;
                 };
-                s.wires.push(Wire {
-                    a: PinAddr::new(
+                let mut wire = Wire::new(
+                    PinAddr::new(
                         a_part as usize,
                         a.get("pin").and_then(|x| x.as_str()).unwrap_or("1"),
                     ),
-                    b: PinAddr::new(
+                    PinAddr::new(
                         b_part as usize,
                         b.get("pin").and_then(|x| x.as_str()).unwrap_or("2"),
                     ),
-                });
+                );
+                if let Some(Json::Arr(points)) = item.get("points") {
+                    for point in points {
+                        let x = point.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let y = point.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        wire.points.push(WirePoint { x, y });
+                    }
+                }
+                if let Some(Json::Arr(color)) = item.get("color") {
+                    let channel = |i: usize| {
+                        color
+                            .get(i)
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                            .min(255) as u8
+                    };
+                    wire.color = Some([channel(0), channel(1), channel(2)]);
+                }
+                wire.name = item
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                s.wires.push(wire);
             }
         }
         if let Some(Json::Arr(items)) = v.get("probes") {
@@ -1353,6 +1509,50 @@ fn pin_json(p: &PinAddr) -> Json {
     m.insert("part".into(), Json::Num(p.part as f64));
     m.insert("pin".into(), Json::Str(p.pin.clone()));
     Json::Obj(m)
+}
+
+/// The place of one pin of a device part: a diode, a transistor, an
+/// amplifier. The layout follows the symbols on the sheet.
+pub fn device_pin_offset(device: crate::library::Device, pin: &str) -> (f32, f32) {
+    use crate::library::Device;
+    let half_w = PART_W * 0.5;
+    let half_h = PART_H * 0.5;
+    match device {
+        Device::Diode | Device::Led | Device::Zener => match pin {
+            "A" => (-half_w, 0.0),
+            _ => (half_w, 0.0),
+        },
+        Device::Bjt { .. } => match pin {
+            "B" => (-half_w, 0.0),
+            "C" => (half_w, -half_h),
+            _ => (half_w, half_h),
+        },
+        Device::Mosfet { .. } => match pin {
+            "G" => (-half_w, 0.0),
+            "D" => (half_w, -half_h),
+            _ => (half_w, half_h),
+        },
+        Device::OpAmp | Device::Comparator => match pin {
+            "IN+" => (-half_w, -half_h * 0.5),
+            "IN-" => (-half_w, half_h * 0.5),
+            _ => (half_w, 0.0),
+        },
+        Device::Timer555 => {
+            // The timer is a box of its own, wider than the other parts, so
+            // that the names of its pins fit inside.
+            let w = 52.0;
+            let h = 30.0;
+            match pin {
+                "GND" => (-18.0, h),
+                "TRIG" => (-w, -24.0),
+                "THR" => (-w, -6.0),
+                "OUT" => (w, -15.0),
+                "DISCH" => (w, 12.0),
+                "CTRL" => (-13.0, -h),
+                _ => (13.0, -h),
+            }
+        }
+    }
 }
 
 /// Body size of a catalogue part, in world units.
@@ -1445,6 +1645,83 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_devices_keep_their_kind() {
+        // A transistor or an amplifier from the catalogue must not turn into
+        // a logic gate: each one has to reach the netlist as itself.
+        let cases = [
+            ("npn", "Bjt"),
+            ("pnp", "Bjt"),
+            ("nmfet", "Mosfet"),
+            ("pmfet", "Mosfet"),
+            ("opamp", "OpAmp"),
+            ("comparator", "Comparator"),
+        ];
+        for (key, want) in cases {
+            let entry = crate::library::builtin()
+                .entries
+                .into_iter()
+                .find(|e| e.key == key)
+                .unwrap_or_else(|| panic!("{key} is in the catalogue"));
+            let mut s = Schematic::empty();
+            let mut part = Part::new("X1".into(), PartKind::Gate, 0.0, 0.0);
+            part.catalog = Some(entry.key.clone());
+            part.catalog_device = entry.device;
+            s.parts.push(part);
+            // The pins have to be wired, otherwise the netlist refuses.
+            let names = s.parts[0].pins();
+            for name in &names {
+                s.wire(0, name, 0, name);
+            }
+            let circuit = s.netlist().unwrap();
+            let device = circuit
+                .components
+                .iter()
+                .find(|c| c.id == "X1")
+                .unwrap_or_else(|| panic!("{key} is missing from the netlist"));
+            let got = match &device.kind {
+                ComponentKind::Bjt(_) => "Bjt",
+                ComponentKind::Mosfet(_) => "Mosfet",
+                ComponentKind::OpAmp(_) => "OpAmp",
+                ComponentKind::Comparator(_) => "Comparator",
+                other => panic!("{key} became {other:?}"),
+            };
+            assert_eq!(got, want, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_transistor_switches_a_lamp() {
+        // An NPN transistor drives a lamp: the collector path opens and
+        // closes with the base voltage.
+        let mut s = Schematic::empty();
+        let v = s.add_part(PartKind::Vsource, 0.0, 0.0);
+        let entry = crate::library::builtin()
+            .entries
+            .into_iter()
+            .find(|e| e.key == "npn")
+            .expect("npn is in the catalogue");
+        let mut q = Part::new("Q1".into(), PartKind::Gate, 0.0, 0.0);
+        q.catalog = Some(entry.key.clone());
+        q.catalog_device = entry.device;
+        s.parts.push(q);
+        let q = s.parts.len() - 1;
+        let supply = s.add_part(PartKind::Vsource, 0.0, 100.0);
+        s.parts[supply].value = 5.0;
+        let g = s.add_part(PartKind::Ground, 100.0, 100.0);
+        s.wire(v, "1", q, "B");
+        s.wire(v, "2", g, "0");
+        s.wire(supply, "1", q, "C");
+        s.wire(supply, "2", g, "0");
+        s.wire(q, "E", g, "0");
+        let circuit = s.netlist().unwrap();
+        let mut sim = Simulator::new(&circuit, Options::default()).unwrap();
+        let sol = sim.dc().unwrap();
+        // The base sits at 5 V, so the transistor conducts.
+        let collector = sol.node("1");
+        assert!(collector < 1.0, "collector={collector}");
+    }
+
+    #[test]
     fn wires_create_nets() {
         let mut s = Schematic::empty();
         let v = s.add_part(PartKind::Vsource, 0.0, 0.0);
@@ -1471,6 +1748,26 @@ mod tests {
         assert_eq!(back.wires.len(), s.wires.len());
         assert_eq!(back.probes.len(), s.probes.len());
         assert_eq!(back.analysis, Analysis::Tran);
+    }
+
+    #[test]
+    fn wire_properties_survive_the_file() {
+        // The colour, the name and the bends of a wire have to survive a
+        // save and a load.
+        let mut s = Schematic::divider();
+        s.wires[0].color = Some([12, 34, 56]);
+        s.wires[0].name = "feed".to_string();
+        s.wires[0].points.push(crate::schematic::WirePoint { x: -10.0, y: 20.0 });
+        let text = s.to_json_value().stringify_pretty();
+        assert!(text.contains("\"color\""), "the colour is in the file");
+        assert!(text.contains("\"points\""), "the bends are in the file");
+        let v = Json::parse(&text).unwrap();
+        let back = Schematic::from_json_value(&v).unwrap();
+        assert_eq!(back.wires[0].color, Some([12, 34, 56]));
+        assert_eq!(back.wires[0].name, "feed");
+        assert_eq!(back.wires[0].points.len(), 1);
+        assert_eq!(back.wires[0].points[0].x, -10.0);
+        assert_eq!(back.wires[0].points[0].y, 20.0);
     }
 
     #[test]

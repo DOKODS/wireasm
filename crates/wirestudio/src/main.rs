@@ -11,6 +11,7 @@ mod i18n;
 mod inspector;
 mod instruments;
 mod settings;
+mod settings_panel;
 mod sheet;
 mod symbols;
 
@@ -40,7 +41,6 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
-            cc.egui_ctx.set_visuals(eframe::egui::Visuals::dark());
             Ok(Box::new(WireStudio::new(initial.clone())))
         }),
     )
