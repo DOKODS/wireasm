@@ -443,7 +443,7 @@ releases/              локальные архивы и правила рел�
 На macOS AArch64 (`rustc 1.99.1`, Apple clang, avr-gcc 7.3.0,
 arm-none-eabi-gcc 16.2.0, arduino-cli 1.6.0):
 
-- `cargo test --workspace` — 67 тест, все проходят.
+- `cargo test --workspace` — 73 теста, все проходят.
 - `cargo clippy --all-targets -- -D warnings` — без предупреждений.
 - Пять хост-примеров собираются и запускаются: `Hello from WireASM!`, `55`,
   `55`, `42`, `42`.
