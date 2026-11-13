@@ -2155,7 +2155,7 @@ pub fn wire_route(a: Pos2, b: Pos2, points: &[wireasm_sim::schematic::WirePoint]
         let mid = (a.x + b.x) * 0.5;
         return vec![a, Pos2::new(mid, a.y), Pos2::new(mid, b.y), b];
     }
-    let mut out = Vec::new();
+    let mut out = vec![a];
     let mut cur = a;
     for p in points {
         let p = Pos2::new(p.x, p.y);
@@ -2172,7 +2172,7 @@ pub fn wire_route(a: Pos2, b: Pos2, points: &[wireasm_sim::schematic::WirePoint]
     if (b.y - cur.y).abs() > 0.5 {
         out.push(Pos2::new(cur.x, b.y));
     }
-    if (b.x - cur.x).abs() > 0.5 {
+    if out.last() != Some(&b) {
         out.push(b);
     }
     out
@@ -2198,6 +2198,35 @@ mod tests {
         assert!(model.hit_pin(pin).is_some());
         let body = model.body_rect(1);
         assert!(model.hit_part(body.center()).is_some());
+    }
+
+    #[test]
+    fn a_wire_without_points_turns_once() {
+        // A wire leaves the first pin horizontally, turns once and enters the
+        // second pin horizontally.
+        let a = Pos2::new(0.0, 0.0);
+        let b = Pos2::new(100.0, 50.0);
+        let route = wire_route(a, b, &[]);
+        assert_eq!(route.len(), 4);
+        assert_eq!(route[0], a);
+        assert_eq!(route[3], b);
+        // The first step is horizontal, the second vertical.
+        assert_eq!(route[1].y, a.y);
+        assert_eq!(route[2].x, route[1].x);
+    }
+
+    #[test]
+    fn a_wire_with_points_goes_through_them() {
+        // A wire with a bend passes through the point of the bend.
+        let a = Pos2::new(0.0, 0.0);
+        let b = Pos2::new(100.0, 0.0);
+        let points = [wireasm_sim::schematic::WirePoint { x: 40.0, y: 30.0 }];
+        let route = wire_route(a, b, &points);
+        assert!(route.contains(&Pos2::new(40.0, 30.0)), "{route:?}");
+        // The bend is in the route and the wire still starts and ends at the
+        // pins.
+        assert_eq!(route.first(), Some(&a));
+        assert_eq!(route.last(), Some(&b));
     }
 
     #[test]
