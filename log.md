@@ -639,3 +639,15 @@ AVR (Arduino Uno/Nano), STM32 — следующим этапом.
 - Версия `0.4.3` в `Cargo.toml`, `VERSION` ядра, README, `docs/language.md`,
   плане, журнале, `CHANGELOG.md`, именах архивов `release.yml` и
   `releases/README.md`.
+- Коммиты: `58f4a85` (параметры, свойства проводов, приборы в нетлисте),
+  `34dd3ed` (провод с изломом не доходил до вывода), `d84979d` (тесты
+  мультиплексора, дешифратора и кодировщика), `e45e432` и `d0a1589`
+  (счётчики тестов и список проверок).
+- Тег `v0.4.3`, релиз
+  https://github.com/DOKODS/wireasm/releases/tag/v0.4.3.
+- CI на `main` — success, четыре платформы.
+- Release на `v0.4.3` — success, четыре архива.
+- Скачанный из релиза `aarch64-macos`: `wireasm --help` печатает 0.4.3,
+  `hello.json --run` — `Hello from WireASM!`, `wiresim` печатает показания
+  приборов.
+- Локальный архив `releases/wirestudio-0.4.3-aarch64-macos.tar.gz` (3.7 МБ).
