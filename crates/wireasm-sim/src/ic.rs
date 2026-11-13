@@ -234,6 +234,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_multiplexer_reads_its_address() {
+        // Eight data inputs, three address lines and an enable. The address
+        // picks the input, the enable opens the output.
+        let mut ins = vec![false; 8];
+        ins[5] = true;
+        // The address lines sit before the enable.
+        ins.push(true); // A
+        ins.push(false); // B
+        ins.push(true); // C
+        ins.push(true); // enable
+        let out = combinational(Func::Mux2, &ins, 3, true);
+        assert!(out[0], "the fifth input is high");
+        assert!(!out[1]);
+
+        // The same multiplexer with the enable low gives nothing.
+        ins[11] = false;
+        let out = combinational(Func::Mux2, &ins, 3, true);
+        assert!(!out[0] && !out[1], "the enable closes the output");
+    }
+
+    #[test]
+    fn a_multiplexer_without_an_enable_works() {
+        // Two data inputs and one address line: no enable at the end.
+        let out = combinational(Func::Mux2, &[false, true, true], 1, false);
+        assert!(out[0], "the second input is high and the address is one");
+        let out = combinational(Func::Mux2, &[false, true, false], 1, false);
+        assert!(!out[0], "the address is zero");
+    }
+
+    #[test]
+    fn a_decoder_picks_one_output() {
+        // Three address lines, eight outputs.
+        let mut ins = vec![false; 4];
+        ins[0] = true; // A
+        ins[2] = true; // C
+        ins[3] = true; // enable
+        let out = combinational(Func::Decoder3to8, &ins, 0, false);
+        assert_eq!(out.len(), 8);
+        assert_eq!(out.iter().filter(|v| **v).count(), 1);
+        assert!(out[5], "the address is five");
+    }
+
+    #[test]
+    fn an_encoder_picks_the_highest_input() {
+        let mut ins = vec![false; 8];
+        ins[2] = true;
+        ins[6] = true;
+        let out = combinational(Func::Encoder8to3, &ins, 0, false);
+        assert_eq!(out, vec![false, true, true], "the sixth input wins");
+    }
+
+    #[test]
     fn nand_truth_table() {
         for a in [false, true] {
             for b in [false, true] {
